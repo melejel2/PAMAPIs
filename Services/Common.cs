@@ -1,5 +1,6 @@
 ﻿using PAMAPIs.Data;
 using PAMAPIs.Models;
+using Microsoft.EntityFrameworkCore;
 
 namespace PAMAPIs.Services
 {

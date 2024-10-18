@@ -9,23 +9,28 @@ using Microsoft.OpenApi.Models;
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
 
+// Syncfusion license registration
 var syncfusionLicenseKey = configuration["Syncfusion:LicenseKey"];
 Syncfusion.Licensing.SyncfusionLicenseProvider.RegisterLicense(syncfusionLicenseKey);
 
+// Database context
 var PAM_DB = configuration.GetConnectionString("QuartzConnection");
 builder.Services.AddDbContext<PAMContext>(options => options.UseSqlServer(PAM_DB));
 
+// Add services to the container
 builder.Services.AddControllers();
-
 builder.Services.AddDistributedMemoryCache();
 builder.Services.AddSession(options =>
 {
     options.IdleTimeout = TimeSpan.FromMinutes(60);
 });
-
 builder.Services.AddSingleton<IHttpContextAccessor, HttpContextAccessor>();
 builder.Services.AddTransient<FuzzyMatchingService>();
 
+// Register Common service
+builder.Services.AddScoped<Common>();
+
+// Authentication
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -41,6 +46,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 
+// Swagger
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo { Title = "PAM APIs", Version = "v1" });
@@ -48,6 +54,7 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
+// Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -68,7 +75,6 @@ app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseSession();
-
 app.UseCors(corsBuilder => corsBuilder
     .AllowAnyOrigin()
     .AllowAnyMethod()
