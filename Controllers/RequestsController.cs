@@ -1,16 +1,12 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.IdentityModel.Tokens;
+
 using Microsoft.AspNetCore.Mvc.Rendering;
 
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.IO;
-using System.Drawing;
 using System.Text;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
 
 using PAMAPIs.Models;
 using PAMAPIs.Services;
@@ -23,21 +19,20 @@ using Syncfusion.XlsIORenderer;
 using QRCoder;
 using SkiaSharp;
 
-
 namespace PAM.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    public class SitesApiController : ControllerBase
+    public class RequestsController : ControllerBase
     {
         private readonly FuzzyMatchingService _fuzzyMatchingService;
         private readonly PAMContext _dbContext;
         private readonly Common _common;
         private readonly IWebHostEnvironment _hostingEnvironment;
-        private readonly ILogger<SitesApiController> _logger;
+        private readonly ILogger<LoginController> _logger;
         private readonly IConfiguration _configuration;
 
-        public SitesApiController(
+        public RequestsController(
             PAMContext dbContext,
             Common common,
             IWebHostEnvironment hostingEnvironment,
@@ -49,101 +44,8 @@ namespace PAM.Controllers
             _dbContext = dbContext;
             _common = common;
             _hostingEnvironment = hostingEnvironment;
-            _logger = loggerFactory.CreateLogger<SitesApiController>();
+            _logger = loggerFactory.CreateLogger<LoginController>();
             _configuration = configuration;
-        }
-
-        [HttpPost("login")]
-        public async Task<IActionResult> Login([FromBody] LoginModel model)
-        {
-            try
-            {
-                var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.UserEmail == model.Email);
-                if (user == null)
-                {
-                    return Unauthorized("Invalid username.");
-                }
-
-                if (user.UserPassword != model.Password)
-                {
-                    return Unauthorized("Invalid password.");
-                }
-
-                var token = GenerateJwtToken(user);
-
-                // Update last login time
-                user.LastLogin = DateTime.Now;
-                _dbContext.Entry(user).State = EntityState.Modified;
-                await _dbContext.SaveChangesAsync();
-
-                if (!user.UpdatePass)
-                {
-                    return Ok(new { requirePasswordUpdate = true, token });
-                }
-
-                return Ok(new { token });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "An error occurred during login");
-                return StatusCode(500, "An error occurred. Please try again.");
-            }
-        }
-
-        [Authorize]
-        [HttpGet("usercountries")]
-        public async Task<IActionResult> GetUserCountries()
-        {
-            try
-            {
-                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
-                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
-                {
-                    return Unauthorized();
-                }
-
-                var user = await _dbContext.Users.FindAsync(userId);
-                if (user == null)
-                {
-                    return NotFound("User not found.");
-                }
-
-                var countries = await GetUserCountriesAsync(user);
-                return Ok(countries);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in GetUserCountries");
-                return StatusCode(500, "An error occurred while retrieving user countries.");
-            }
-        }
-
-        [Authorize]
-        [HttpGet("usersites")]
-        public async Task<IActionResult> GetUserSites()
-        {
-            try
-            {
-                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
-                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
-                {
-                    return Unauthorized();
-                }
-
-                var user = await _dbContext.Users.FindAsync(userId);
-                if (user == null)
-                {
-                    return NotFound("User not found.");
-                }
-
-                var sites = await GetUserSitesAsync(user);
-                return Ok(sites);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in GetUserSites");
-                return StatusCode(500, "An error occurred while retrieving user sites.");
-            }
         }
 
         [Authorize]
@@ -769,96 +671,6 @@ namespace PAM.Controllers
             return roleId == 4 || roleId == 5 || roleId == 7 || roleId == 8;
         }
 
-        private async Task<List<Country>> GetUserCountriesAsync(User user)
-        {
-            switch (user.RoleId)
-            {
-                case 1: // Admin
-                    return await _dbContext.Countries.ToListAsync();
-                case 2:
-                case 3:
-                case 6:
-                case 8:
-                case 9:
-                    return await _dbContext.UserCountries
-                        .Where(uc => uc.UsrId == user.UsrId)
-                        .Join(_dbContext.Countries,
-                            uc => uc.CountryId,
-                            c => c.CountryId,
-                            (uc, c) => c)
-                        .ToListAsync();
-                case 4:
-                case 5:
-                case 7:
-                    var countriesFromSites = await _dbContext.UserSites
-                        .Where(us => us.UsrId == user.UsrId)
-                        .Join(_dbContext.Sites,
-                            us => us.SiteId,
-                            s => s.SiteId,
-                            (us, s) => s.CountryId)
-                        .Distinct()
-                        .Join(_dbContext.Countries,
-                            cId => cId,
-                            c => c.CountryId,
-                            (cId, c) => c)
-                        .ToListAsync();
-
-                    if (user.CountryId != 0)
-                    {
-                        var userCountry = await _dbContext.Countries.FindAsync(user.CountryId);
-                        if (userCountry != null && !countriesFromSites.Any(c => c.CountryId == user.CountryId))
-                        {
-                            countriesFromSites.Add(userCountry);
-                        }
-                    }
-
-                    return countriesFromSites;
-                default:
-                    return new List<Country>();
-            }
-        }
-
-        private async Task<List<Site>> GetUserSitesAsync(User user)
-        {
-            switch (user.RoleId)
-            {
-                case 1: // Admin
-                    return await _dbContext.Sites.ToListAsync();
-                case 2:
-                case 3:
-                case 6:
-                case 8:
-                case 9:
-                    var countries = await GetUserCountriesAsync(user);
-                    return await _dbContext.Sites
-                        .Where(s => countries.Select(c => c.CountryId).Contains(s.CountryId))
-                        .ToListAsync();
-                case 4:
-                case 5:
-                case 7:
-                    var userSites = await _dbContext.UserSites
-                        .Where(us => us.UsrId == user.UsrId)
-                        .Join(_dbContext.Sites,
-                            us => us.SiteId,
-                            s => s.SiteId,
-                            (us, s) => s)
-                        .ToListAsync();
-
-                    if (user.SiteId != 0)
-                    {
-                        var userSite = await _dbContext.Sites.FindAsync(user.SiteId);
-                        if (userSite != null && !userSites.Any(s => s.SiteId == user.SiteId))
-                        {
-                            userSites.Add(userSite);
-                        }
-                    }
-
-                    return userSites;
-                default:
-                    return new List<Site>();
-            }
-        }
-
         private async Task DeleteTemMaterialRequestItemsAsync(int userId, int siteId)
         {
             try
@@ -897,47 +709,6 @@ namespace PAM.Controllers
                 return new List<SelectListItem>();
             }
         }
-
-        private string GenerateJwtToken(User user)
-        {
-            var jwtKey = _configuration["Jwt:Key"];
-            var jwtIssuer = _configuration["Jwt:Issuer"];
-
-            if (string.IsNullOrEmpty(jwtKey) || string.IsNullOrEmpty(jwtIssuer))
-            {
-                throw new InvalidOperationException("JWT configuration is missing or invalid.");
-            }
-
-            var claims = new List<Claim>
-            {
-                new Claim(ClaimTypes.NameIdentifier, user.UsrId.ToString()),
-                new Claim(ClaimTypes.Name, user.UserName),
-                new Claim(ClaimTypes.Role, user.RoleId.ToString()),
-                new Claim("CountryId", user.CountryId.ToString()),
-                new Claim("SiteId", user.SiteId.ToString())
-            };
-
-            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
-            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-            var expires = DateTime.Now.AddDays(Convert.ToDouble(_configuration["Jwt:ExpireDays"] ?? "7"));
-
-            var token = new JwtSecurityToken(
-                jwtIssuer,
-                jwtIssuer,
-                claims,
-                expires: expires,
-                signingCredentials: creds
-            );
-
-            return new JwtSecurityTokenHandler().WriteToken(token);
-        }
-
-        public class LoginModel
-        {
-            public string Email { get; set; }
-            public string Password { get; set; }
-        }
-
         public class NewMaterialRequestModel
         {
             public string Remarks { get; set; }
