@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc.Rendering;
 
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.IO;
 using System.Drawing;
 using System.Text;
 using System.Drawing.Drawing2D;
@@ -20,6 +21,7 @@ using Syncfusion.XlsIO;
 using Syncfusion.XlsIORenderer;
 
 using QRCoder;
+using SkiaSharp;
 
 
 namespace PAM.Controllers
@@ -573,7 +575,11 @@ namespace PAM.Controllers
                         IWorkbook workbook = application.Workbooks.Open(fileStream);
                         IWorksheet worksheet = workbook.Worksheets["MaterialRequistionForm"];
 
-                        AddQRCodeToWorksheet(worksheet, qrCodeImagePath);
+                        // Read the QR code image into a byte array
+                        byte[] qrCodeImageBytes = System.IO.File.ReadAllBytes(qrCodeImagePath);
+
+                        // Add the QR code to the worksheet
+                        AddQRCodeToWorksheet(worksheet, qrCodeImageBytes);
 
                         string str = getData.RefNo;
                         string result = str.Substring(str.LastIndexOf('-') + 1);
@@ -643,69 +649,89 @@ namespace PAM.Controllers
                 return StatusCode(500, "An error occurred while generating the PDF.");
             }
         }
-
         private string QrGenerator(string qrText)
         {
-            using QRCodeGenerator qrGenerator = new();
-            QRCodeData qrCodeData = qrGenerator.CreateQrCode(qrText, QRCodeGenerator.ECCLevel.Q);
-            QRCode qrCode = new(qrCodeData);
-            Bitmap qrCodeImage = qrCode.GetGraphic(20);
+            using var qrGenerator = new QRCodeGenerator();
+            using var qrCodeData = qrGenerator.CreateQrCode(qrText, QRCodeGenerator.ECCLevel.Q);
+            using var qrCode = new PngByteQRCode(qrCodeData);
+            byte[] qrCodeImage = qrCode.GetGraphic(20);
 
             // Load the logo image
             string logoPath = Path.Combine("wwwroot", "images", "logo.png"); // Ensure this path is correct
-            Bitmap logo = new(logoPath);
+            byte[] logoBytes = System.IO.File.ReadAllBytes(logoPath);
 
-            // Calculate the position and size for the logo
-            int logoSize = qrCodeImage.Width / 5; // Adjust the size of the logo (e.g., 1/5th of the QR code size)
-            int logoX = (qrCodeImage.Width - logoSize) / 2;
-            int logoY = (qrCodeImage.Height - logoSize) / 2;
+            // Combine QR code and logo
+            byte[] combinedImage = CombineQrCodeAndLogo(qrCodeImage, logoBytes);
 
-            // Resize the logo
-            Bitmap resizedLogo = new(logo, new Size(logoSize, logoSize));
-
-            // Draw the logo onto the QR code
-            using (Graphics graphics = Graphics.FromImage(qrCodeImage))
-            {
-                graphics.DrawImage(resizedLogo, logoX, logoY, logoSize, logoSize);
-            }
-
-            // Save the image to a temporary file in the user's temp folder with .png extension
+            // Save the combined image to a temporary file
             string tempFile = Path.Combine(Path.GetTempPath(), Path.ChangeExtension(Path.GetRandomFileName(), ".png"));
-            qrCodeImage.Save(tempFile, System.Drawing.Imaging.ImageFormat.Png);
+            System.IO.File.WriteAllBytes(tempFile, combinedImage); // Explicit namespace
 
-            // Dispose the logo image to free up resources
-            logo.Dispose();
-            resizedLogo.Dispose();
-
-            // Return the file path
             return tempFile;
         }
-        private void AddQRCodeToWorksheet(IWorksheet worksheet, string qrCodeImagePath)
+
+
+        private byte[] CombineQrCodeAndLogo(byte[] qrCodeImage, byte[] logoImage)
         {
-            using (FileStream imageStream = new FileStream(qrCodeImagePath, FileMode.Open, FileAccess.Read))
-            using (var originalImage = System.Drawing.Image.FromStream(imageStream))
+            // Decode the QR code and logo images
+            using var qrCodeBitmap = SKBitmap.Decode(qrCodeImage);
+            using var logoBitmap = SKBitmap.Decode(logoImage);
+
+            // Resize and position the logo
+            int logoSize = qrCodeBitmap.Width / 5;
+            int logoX = (qrCodeBitmap.Width - logoSize) / 2;
+            int logoY = (qrCodeBitmap.Height - logoSize) / 2;
+
+            // Create a surface to draw the combined image
+            using var surface = SKSurface.Create(new SKImageInfo(qrCodeBitmap.Width, qrCodeBitmap.Height));
+            var canvas = surface.Canvas;
+
+            // Draw the QR code onto the canvas
+            canvas.DrawBitmap(qrCodeBitmap, 0, 0);
+
+            // Draw the resized logo onto the canvas
+            using var resizedLogo = logoBitmap.Resize(new SKImageInfo(logoSize, logoSize), SKFilterQuality.High);
+            if (resizedLogo != null)
             {
-                int newWidth = originalImage.Width / 13;
-                int newHeight = originalImage.Height / 13;
-
-                var resizedImage = new Bitmap(newWidth, newHeight);
-                using (var graphics = Graphics.FromImage(resizedImage))
-                {
-                    graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                    graphics.DrawImage(originalImage, 0, 0, newWidth, newHeight);
-                }
-
-                using (var memoryStream = new MemoryStream())
-                {
-                    resizedImage.Save(memoryStream, ImageFormat.Png);
-                    memoryStream.Position = 0;
-                    Syncfusion.Drawing.Image syncfusionImage = Syncfusion.Drawing.Image.FromStream(memoryStream);
-
-                    worksheet.PageSetup.CenterHeaderImage = syncfusionImage;
-                    worksheet.PageSetup.CenterHeader = "&G";
-                }
+                canvas.DrawBitmap(resizedLogo, new SKRect(logoX, logoY, logoX + logoSize, logoY + logoSize));
             }
+
+            // Get the final combined image as a byte array
+            using var image = surface.Snapshot();
+            using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+            return data.ToArray();
         }
+
+        private void AddQRCodeToWorksheet(IWorksheet worksheet, byte[] qrCodeImageBytes)
+        {
+            // Load the QR code image from the byte array using SkiaSharp
+            using var qrCodeBitmap = SKBitmap.Decode(qrCodeImageBytes);
+
+            // Resize the QR code image
+            int newWidth = qrCodeBitmap.Width / 13;
+            int newHeight = qrCodeBitmap.Height / 13;
+            using var resizedImage = new SKBitmap(newWidth, newHeight);
+            using (var canvas = new SKCanvas(resizedImage))
+            {
+                canvas.DrawBitmap(qrCodeBitmap, new SKRect(0, 0, newWidth, newHeight));
+            }
+
+            // Encode the resized image into a byte array
+            using var resizedImageStream = new MemoryStream();
+            using (var data = resizedImage.Encode(SKEncodedImageFormat.Png, 100))
+            {
+                data.SaveTo(resizedImageStream);
+            }
+
+            resizedImageStream.Position = 0;
+
+            // Convert to Syncfusion.Drawing.Image for adding to worksheet
+            var syncfusionImage = Syncfusion.Drawing.Image.FromStream(resizedImageStream);
+
+            worksheet.PageSetup.CenterHeaderImage = syncfusionImage;
+            worksheet.PageSetup.CenterHeader = "&G";
+        }
+
         private async Task<bool> UserHasAccessToSite(int userId, int siteId)
         {
             var user = await _dbContext.Users.FindAsync(userId);
