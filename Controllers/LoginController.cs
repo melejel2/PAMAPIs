@@ -402,9 +402,6 @@ namespace PAM.Controllers
 
             return countryIds.Distinct().ToList();
         }
-
-     
-
         public class LoginModel
         {
             public string Email { get; set; }
