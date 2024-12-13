@@ -37,29 +37,61 @@ namespace PAM.Controllers
             _configuration = configuration;
         }
 
+        private string GenerateJwtToken(User user)
+        {
+            var jwtKey = _configuration["Jwt:Key"];
+            var jwtIssuer = _configuration["Jwt:Issuer"];
+
+            if (string.IsNullOrEmpty(jwtKey) || string.IsNullOrEmpty(jwtIssuer))
+            {
+                throw new InvalidOperationException("JWT configuration is missing or invalid.");
+            }
+
+            var claims = new List<Claim>
+            {
+                new Claim(ClaimTypes.NameIdentifier, user.UsrId.ToString()),
+                new Claim(ClaimTypes.Name, user.UserName),
+                new Claim(ClaimTypes.Role, user.RoleId.ToString()),
+                new Claim("CountryId", user.CountryId.ToString()),
+                new Claim("SiteId", user.SiteId.ToString())
+            };
+
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
+            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+            var expires = DateTime.Now.AddDays(Convert.ToDouble(_configuration["Jwt:ExpireDays"] ?? "7"));
+
+            var token = new JwtSecurityToken(
+                jwtIssuer,
+                jwtIssuer,
+                claims,
+                expires: expires,
+                signingCredentials: creds
+            );
+
+            return new JwtSecurityTokenHandler().WriteToken(token);
+        }
+
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginModel model)
         {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
             try
             {
-                var users = await _dbContext.Users
-                    .Where(u => u.UserEmail == model.Email)
-                    .ToListAsync();
+                var user = await _dbContext.Users
+                    .FirstOrDefaultAsync(u => u.UserEmail == model.Email && u.UserPassword == model.Password);
 
-                if (users == null || users.Count == 0)
-                {
-                    return Unauthorized("Invalid username.");
-                }
-
-                var user = users.FirstOrDefault(u => u.UserPassword == model.Password);
                 if (user == null)
                 {
-                    return Unauthorized("Invalid password.");
+                    return Unauthorized("Invalid email or password.");
                 }
 
                 var token = GenerateJwtToken(user);
 
-                user.LastLogin = DateTime.Now;
+                user.LastLogin = DateTime.UtcNow;
                 _dbContext.Entry(user).State = EntityState.Modified;
                 await _dbContext.SaveChangesAsync();
 
@@ -68,7 +100,16 @@ namespace PAM.Controllers
                     return Ok(new { requirePasswordUpdate = true, token });
                 }
 
-                return Ok(new { token });
+                return Ok(new
+                {
+                    token,
+                    username = user.UserName,
+                    roleid = user.RoleId,
+                    countryid = user.CountryId,
+                    siteid = user.SiteId,
+                    updatepass = user.UpdatePass,
+                    requirePasswordUpdate = !user.UpdatePass
+                });
             }
             catch (Exception ex)
             {
@@ -362,39 +403,7 @@ namespace PAM.Controllers
             return countryIds.Distinct().ToList();
         }
 
-        private string GenerateJwtToken(User user)
-        {
-            var jwtKey = _configuration["Jwt:Key"];
-            var jwtIssuer = _configuration["Jwt:Issuer"];
-
-            if (string.IsNullOrEmpty(jwtKey) || string.IsNullOrEmpty(jwtIssuer))
-            {
-                throw new InvalidOperationException("JWT configuration is missing or invalid.");
-            }
-
-            var claims = new List<Claim>
-            {
-                new Claim(ClaimTypes.NameIdentifier, user.UsrId.ToString()),
-                new Claim(ClaimTypes.Name, user.UserName),
-                new Claim(ClaimTypes.Role, user.RoleId.ToString()),
-                new Claim("CountryId", user.CountryId.ToString()),
-                new Claim("SiteId", user.SiteId.ToString())
-            };
-
-            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
-            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-            var expires = DateTime.Now.AddDays(Convert.ToDouble(_configuration["Jwt:ExpireDays"] ?? "7"));
-
-            var token = new JwtSecurityToken(
-                jwtIssuer,
-                jwtIssuer,
-                claims,
-                expires: expires,
-                signingCredentials: creds
-            );
-
-            return new JwtSecurityTokenHandler().WriteToken(token);
-        }
+     
 
         public class LoginModel
         {

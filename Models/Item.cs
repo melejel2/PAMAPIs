@@ -12,4 +12,6 @@ public partial class Item
     public string? ItemUnit { get; set; }
 
     public int? CategoryId { get; set; }
+
+    public string? SubCategory { get; set; }
 }

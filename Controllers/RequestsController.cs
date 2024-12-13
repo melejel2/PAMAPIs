@@ -139,46 +139,6 @@ namespace PAM.Controllers
         }
 
         [Authorize]
-        [HttpGet("subcontractors/{siteId}")]
-        public async Task<IActionResult> GetSubcontractors(int siteId)
-        {
-            try
-            {
-                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
-                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
-                {
-                    return Unauthorized();
-                }
-
-                var user = await _dbContext.Users.FindAsync(userId);
-                if (user == null)
-                {
-                    return NotFound("User not found.");
-                }
-
-                // Verify if the user has access to the specified site
-                if (!await UserHasAccessToSite(userId, siteId))
-                {
-                    return Forbid("User does not have access to the specified site.");
-                }
-
-                var site = await _dbContext.Sites.FindAsync(siteId);
-                if (site == null)
-                {
-                    return NotFound("Site not found.");
-                }
-
-                var subcontractors = await PopulateSubAsync(site.CountryId);
-                return Ok(subcontractors);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in GetSubcontractors");
-                return StatusCode(500, "An error occurred while retrieving subcontractors.");
-            }
-        }
-
-        [Authorize]
         [HttpGet("searchitems")]
         public async Task<IActionResult> SearchItems([FromQuery] string searchTerm)
         {
@@ -192,7 +152,15 @@ namespace PAM.Controllers
                 var items = await _dbContext.Items
                     .Where(i => i.ItemName.Contains(searchTerm))
                     .Take(20)
-                    .Select(i => new SelectListItem { Value = i.ItemId.ToString(), Text = i.ItemName })
+                    .Select(i => new
+                    {
+                        ItemId = i.ItemId.ToString(), // Keeping the value as string for compatibility
+                        Text = i.ItemName,
+                        ItemUnit = i.ItemUnit,
+                        CategoryId = i.CategoryId,
+                        SubCategory = i.SubCategory,
+                        Selected = false
+                    })
                     .ToListAsync();
 
                 return Ok(items);
@@ -201,6 +169,25 @@ namespace PAM.Controllers
             {
                 _logger.LogError(ex, "Error in SearchItems");
                 return StatusCode(500, "An error occurred while searching items.");
+            }
+        }
+
+        [Authorize]
+        [HttpGet("subcontractors")]
+        public async Task<IActionResult> GetSubcontractors()
+        {
+            try
+            {
+                var subcontractors = await _dbContext.SubContractors
+                    .Select(s => new { s.SubId, s.SubName, s.CountryId })
+                    .Take(200)
+                    .ToListAsync();
+                return Ok(subcontractors);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in GetSubcontractors");
+                return StatusCode(500, "An error occurred while retrieving subcontractors.");
             }
         }
 
@@ -234,6 +221,26 @@ namespace PAM.Controllers
 
                 string siteCode = _common.GetSiteCode(siteId);
 
+                var site = await _dbContext.Sites
+                    .FirstOrDefaultAsync(s => s.SiteId == siteId);
+
+                if (site == null)
+                {
+                    return NotFound("Site not found.");
+                }
+
+                int countryId = site.CountryId;
+
+                var country = await _dbContext.Countries
+                    .FirstOrDefaultAsync(c => c.CountryId == countryId);
+
+                if (country == null)
+                {
+                    return NotFound("Country not found.");
+                }
+
+                string countryCode = country.CountryCode;
+
                 int latestRequestNumber = await _dbContext.MaterialRequests
                     .Where(m => m.SiteId == siteId)
                     .OrderByDescending(o => o.MaterialId)
@@ -241,7 +248,9 @@ namespace PAM.Controllers
                     .FirstOrDefaultAsync();
 
                 int newRequestNumber = latestRequestNumber + 1;
-                string refNumber = $"REQ-{siteCode}-{newRequestNumber:D4}";
+                string refNumber = $"REQ-{siteCode}-{newRequestNumber:D4}-{countryCode}";
+
+                bool isPmRole = user.RoleId == 7 || user.RoleId == 10;
 
                 var newRequest = new MaterialRequest
                 {
@@ -249,24 +258,40 @@ namespace PAM.Controllers
                     RefNo = refNumber,
                     SiteId = siteId,
                     Date = DateTime.Now,
-                    Status = "Pending",
+                    Status = "Pending Approval",
                     Remarks = model.Remarks,
                     UsrId = userId,
-                    IsApprovedByPm = false
+                    IsApprovedByPm = isPmRole
                 };
 
                 _dbContext.MaterialRequests.Add(newRequest);
                 await _dbContext.SaveChangesAsync();
 
+                var itemIds = model.Items.Select(i => i.ItemId).ToList();
+                var items = await _dbContext.Items
+                    .Where(i => itemIds.Contains(i.ItemId))
+                    .Select(i => new { i.ItemId, i.CategoryId })
+                    .ToListAsync();
+
+                var itemCategoryMap = items.ToDictionary(i => i.ItemId, i => i.CategoryId);
+
                 foreach (var item in model.Items)
                 {
+                    if (!itemCategoryMap.TryGetValue(item.ItemId, out int? categoryId))
+                    {
+                        return BadRequest($"Invalid ItemId: {item.ItemId}");
+                    }
+
                     var newDetail = new MaterialDetail
                     {
                         MaterialId = newRequest.MaterialId,
                         ItemId = item.ItemId,
                         Quantity = item.Quantity,
                         CodeId = item.CostCodeId,
-                        SiteId = siteId
+                        SubId = item.SubId,
+                        SiteId = siteId,
+                        CategoryId = categoryId,
+                        UsrId = userId
                     };
 
                     _dbContext.MaterialDetails.Add(newDetail);
@@ -296,6 +321,10 @@ namespace PAM.Controllers
                 return StatusCode(500, "An error occurred while processing your request.");
             }
         }
+
+
+
+
 
         [Authorize]
         [HttpGet("listrequests/{siteId}")]
@@ -759,6 +788,7 @@ namespace PAM.Controllers
             public int ItemId { get; set; }
             public double Quantity { get; set; }
             public int CostCodeId { get; set; }
+            public int SubId { get; set; } // Add this line
         }
     }
 }
