@@ -11,14 +11,12 @@ using PAMAPIs.Models;
 using PAMAPIs.Services;
 using PAMAPIs.Data;
 
-
 namespace PAM.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
     public class LoginController : ControllerBase
     {
-        private readonly FuzzyMatchingService _fuzzyMatchingService;
         private readonly PAMContext _dbContext;
         private readonly Common _common;
         private readonly IWebHostEnvironment _hostingEnvironment;
@@ -30,10 +28,8 @@ namespace PAM.Controllers
             Common common,
             IWebHostEnvironment hostingEnvironment,
             ILoggerFactory loggerFactory,
-            FuzzyMatchingService fuzzyMatchingService,
             IConfiguration configuration)
         {
-            _fuzzyMatchingService = fuzzyMatchingService;
             _dbContext = dbContext;
             _common = common;
             _hostingEnvironment = hostingEnvironment;
@@ -46,7 +42,6 @@ namespace PAM.Controllers
         {
             try
             {
-                // Fetch users with the same email
                 var users = await _dbContext.Users
                     .Where(u => u.UserEmail == model.Email)
                     .ToListAsync();
@@ -56,17 +51,14 @@ namespace PAM.Controllers
                     return Unauthorized("Invalid username.");
                 }
 
-                // Match the user with the correct password
                 var user = users.FirstOrDefault(u => u.UserPassword == model.Password);
                 if (user == null)
                 {
                     return Unauthorized("Invalid password.");
                 }
 
-                // Generate token
                 var token = GenerateJwtToken(user);
 
-                // Update last login time
                 user.LastLogin = DateTime.Now;
                 _dbContext.Entry(user).State = EntityState.Modified;
                 await _dbContext.SaveChangesAsync();
@@ -103,7 +95,6 @@ namespace PAM.Controllers
                     return NotFound("User not found.");
                 }
 
-                // Use the existing helper method
                 var countries = await GetUserCountriesAsync(user);
                 return Ok(countries);
             }
@@ -114,10 +105,9 @@ namespace PAM.Controllers
             }
         }
 
-
         [Authorize]
         [HttpGet("usersites")]
-        public async Task<IActionResult> GetUserSites()
+        public async Task<IActionResult> GetUserSites([FromQuery] int countryId)
         {
             try
             {
@@ -133,8 +123,7 @@ namespace PAM.Controllers
                     return NotFound("User not found.");
                 }
 
-                // Use the existing helper method
-                var sites = await GetUserSitesAsync(user);
+                var sites = await GetUserSitesAsync(user, countryId);
                 return Ok(sites);
             }
             catch (Exception ex)
@@ -143,28 +132,67 @@ namespace PAM.Controllers
                 return StatusCode(500, "An error occurred while retrieving user sites.");
             }
         }
-       private async Task<List<Country>> GetUserCountriesAsync(User user)
+
+        private async Task<List<Country>> GetUserCountriesAsync(User user)
         {
             switch (user.RoleId)
             {
                 case 1: // Admin
+                    // Access to all countries
                     return await _dbContext.Countries.ToListAsync();
+
                 case 2:
                 case 3:
                 case 6:
                 case 8:
                 case 9:
-                    return await _dbContext.UserCountries
+                    // Has a primary CountryId and may have additional countries in UserCountries
+                    var role2xCountries = new List<Country>();
+
+                    if (user.CountryId != 0)
+                    {
+                        var primaryCountry = await _dbContext.Countries.FindAsync(user.CountryId);
+                        if (primaryCountry != null) role2xCountries.Add(primaryCountry);
+                    }
+
+                    var additionalCountries2x = await _dbContext.UserCountries
                         .Where(uc => uc.UsrId == user.UsrId)
                         .Join(_dbContext.Countries,
                             uc => uc.CountryId,
                             c => c.CountryId,
                             (uc, c) => c)
                         .ToListAsync();
+
+                    role2xCountries.AddRange(additionalCountries2x);
+                    return role2xCountries.Distinct().ToList();
+
                 case 4:
                 case 5:
                 case 7:
-                    var countriesFromSites = await _dbContext.UserSites
+                case 10:
+                    // Has primary CountryId & SiteId, may have additional UserCountries and UserSites
+                    var role4xCountries = new List<Country>();
+
+                    // Add primary country if available
+                    if (user.CountryId != 0)
+                    {
+                        var primaryCountry = await _dbContext.Countries.FindAsync(user.CountryId);
+                        if (primaryCountry != null) role4xCountries.Add(primaryCountry);
+                    }
+
+                    // Add countries from UserCountries
+                    var additionalCountries4x = await _dbContext.UserCountries
+                        .Where(uc => uc.UsrId == user.UsrId)
+                        .Join(_dbContext.Countries,
+                            uc => uc.CountryId,
+                            c => c.CountryId,
+                            (uc, c) => c)
+                        .ToListAsync();
+
+                    role4xCountries.AddRange(additionalCountries4x);
+
+                    // Add countries from UserSites
+                    var countriesFromUserSites = await _dbContext.UserSites
                         .Where(us => us.UsrId == user.UsrId)
                         .Join(_dbContext.Sites,
                             us => us.SiteId,
@@ -172,73 +200,158 @@ namespace PAM.Controllers
                             (us, s) => s.CountryId)
                         .Distinct()
                         .Join(_dbContext.Countries,
-                            cId => cId,
+                            cid => cid,
                             c => c.CountryId,
-                            (cId, c) => c)
+                            (cid, c) => c)
                         .ToListAsync();
 
-                    if (user.CountryId != 0)
-                    {
-                        var userCountry = await _dbContext.Countries.FindAsync(user.CountryId);
-                        if (userCountry != null && !countriesFromSites.Any(c => c.CountryId == user.CountryId))
-                        {
-                            countriesFromSites.Add(userCountry);
-                        }
-                    }
+                    role4xCountries.AddRange(countriesFromUserSites);
 
-                    return countriesFromSites;
+                    return role4xCountries.Distinct().ToList();
+
                 default:
                     return new List<Country>();
             }
         }
 
-        private async Task<List<Site>> GetUserSitesAsync(User user)
+        private async Task<List<Site>> GetUserSitesAsync(User user, int countryId)
         {
             switch (user.RoleId)
             {
                 case 1: // Admin
-                    return await _dbContext.Sites.ToListAsync();
+                    // Admin has full access to all sites of the requested country
+                    return await _dbContext.Sites
+                        .Where(s => s.CountryId == countryId)
+                        .ToListAsync();
 
                 case 2:
                 case 3:
                 case 6:
                 case 8:
                 case 9:
-                    // Retrieve all country IDs the user has access to
-                    var countryIds = await GetUserCountryIdsAsync(user);
-
-                    if (!countryIds.Any())
+                    // These roles have a primary country and possibly additional countries (full access to those countries).
+                    var accessibleCountries2x = await GetAccessibleCountriesFor2xRoles(user);
+                    if (!accessibleCountries2x.Contains(countryId))
                     {
-                        // If no countries assigned, return empty list or handle accordingly
                         return new List<Site>();
                     }
-
-                    // Use .Contains() with an array to avoid EF Core generating OPENJSON
                     return await _dbContext.Sites
-                        .Where(s => countryIds.Contains(s.CountryId))
+                        .Where(s => s.CountryId == countryId)
                         .ToListAsync();
 
                 case 4:
                 case 5:
                 case 7:
-                // Existing logic for roles 4, 5, and 7
-                // ...
+                case 10:
+                    // For these roles:
+                    // - If countryId == user's primary CountryId and not in UserCountries, return the primary site plus any UserSites in that country.
+                    // - If countryId is in UserCountries, return all sites in that country.
+                    // - If countryId is only from UserSites, return only those assigned sites.
+
+                    var (primaryCountryId, primarySiteId) = (user.CountryId, user.SiteId);
+
+                    // Get all userCountries and userSites data
+                    var userCountries = await GetUserCountriesFor4xRoles(user);
+                    var userCountryIds = userCountries.Select(c => c.CountryId).Distinct().ToList();
+
+                    // Check if requested country is user's primary country
+                    bool isPrimaryCountry = (countryId == primaryCountryId && primaryCountryId != 0);
+
+                    // Check if requested country is in userCountries
+                    bool inUserCountries = userCountryIds.Contains(countryId);
+
+                    // Collect sites
+                    if (inUserCountries)
+                    {
+                        // Full access to that country's sites
+                        return await _dbContext.Sites
+                            .Where(s => s.CountryId == countryId)
+                            .ToListAsync();
+                    }
+
+                    // If not in userCountries:
+                    // Check userSites for sites in the requested country
+                    var userSiteIds = await _dbContext.UserSites
+                        .Where(us => us.UsrId == user.UsrId)
+                        .Select(us => us.SiteId)
+                        .ToListAsync();
+
+                    var userSitesInCountry = await _dbContext.Sites
+                        .Where(s => userSiteIds.Contains(s.SiteId) && s.CountryId == countryId)
+                        .ToListAsync();
+
+                    if (isPrimaryCountry)
+                    {
+                        // Add primary site if it belongs to this country
+                        if (primarySiteId != 0)
+                        {
+                            var primarySite = await _dbContext.Sites
+                                .FirstOrDefaultAsync(s => s.SiteId == primarySiteId && s.CountryId == countryId);
+                            if (primarySite != null && !userSitesInCountry.Any(s => s.SiteId == primarySite.SiteId))
+                            {
+                                userSitesInCountry.Add(primarySite);
+                            }
+                        }
+                        return userSitesInCountry;
+                    }
+                    else
+                    {
+                        // Country is not primary and not in userCountries, so we only return sites from userSites that match this country
+                        return userSitesInCountry;
+                    }
 
                 default:
                     return new List<Site>();
             }
         }
-        private async Task<int[]> GetUserCountryIdsAsync(User user)
+
+        private async Task<List<Country>> GetUserCountriesFor4xRoles(User user)
+        {
+            var countries = new List<Country>();
+
+            if (user.CountryId != 0)
+            {
+                var primaryCountry = await _dbContext.Countries.FindAsync(user.CountryId);
+                if (primaryCountry != null) countries.Add(primaryCountry);
+            }
+
+            var additionalCountries = await _dbContext.UserCountries
+                .Where(uc => uc.UsrId == user.UsrId)
+                .Join(_dbContext.Countries,
+                    uc => uc.CountryId,
+                    c => c.CountryId,
+                    (uc, c) => c)
+                .ToListAsync();
+
+            countries.AddRange(additionalCountries);
+
+            var countriesFromUserSites = await _dbContext.UserSites
+                .Where(us => us.UsrId == user.UsrId)
+                .Join(_dbContext.Sites,
+                    us => us.SiteId,
+                    s => s.SiteId,
+                    (us, s) => s.CountryId)
+                .Distinct()
+                .Join(_dbContext.Countries,
+                    cid => cid,
+                    c => c.CountryId,
+                    (cid, c) => c)
+                .ToListAsync();
+
+            countries.AddRange(countriesFromUserSites);
+
+            return countries.Distinct().ToList();
+        }
+
+        private async Task<List<int>> GetAccessibleCountriesFor2xRoles(User user)
         {
             var countryIds = new List<int>();
 
-            // Add primary country if assigned
             if (user.CountryId != 0)
             {
                 countryIds.Add(user.CountryId);
             }
 
-            // Add additional countries from UserCountries
             var additionalCountryIds = await _dbContext.UserCountries
                 .Where(uc => uc.UsrId == user.UsrId)
                 .Select(uc => uc.CountryId)
@@ -246,12 +359,8 @@ namespace PAM.Controllers
 
             countryIds.AddRange(additionalCountryIds);
 
-            // Remove duplicates if any
-            return countryIds.Distinct().ToArray();
+            return countryIds.Distinct().ToList();
         }
-
-
-
 
         private string GenerateJwtToken(User user)
         {

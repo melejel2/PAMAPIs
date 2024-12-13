@@ -572,7 +572,6 @@ namespace PAM.Controllers
             return tempFile;
         }
 
-
         private byte[] CombineQrCodeAndLogo(byte[] qrCodeImage, byte[] logoImage)
         {
             // Decode the QR code and logo images
@@ -603,7 +602,6 @@ namespace PAM.Controllers
             using var data = image.Encode(SKEncodedImageFormat.Png, 100);
             return data.ToArray();
         }
-
         private void AddQRCodeToWorksheet(IWorksheet worksheet, byte[] qrCodeImageBytes)
         {
             // Load the QR code image from the byte array using SkiaSharp
@@ -633,7 +631,6 @@ namespace PAM.Controllers
             worksheet.PageSetup.CenterHeaderImage = syncfusionImage;
             worksheet.PageSetup.CenterHeader = "&G";
         }
-
         private async Task<bool> UserHasAccessToSite(int userId, int siteId)
         {
             var user = await _dbContext.Users.FindAsync(userId);
@@ -665,7 +662,6 @@ namespace PAM.Controllers
                     return false; // Other roles don't have access to send requests
             }
         }
-
         private bool CanUserSendRequests(int roleId)
         {
             return roleId == 4 || roleId == 5 || roleId == 7 || roleId == 8;
