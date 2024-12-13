@@ -45,4 +45,8 @@ public partial class MaterialDetail
     [ForeignKey("UsrId")]
     public virtual User GetUsers { get; set; }
 
+    // Navigation property to MaterialRequest
+    public MaterialRequest MaterialRequest { get; set; }
+
+
 }

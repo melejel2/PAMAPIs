@@ -233,6 +233,12 @@ public partial class PAMContext : DbContext
             entity.Property(e => e.Status)
                 .HasMaxLength(50)
                 .IsUnicode(false);
+
+            // Configure one-to-many relationship with MaterialDetail
+            entity.HasMany(e => e.MaterialDetails)
+                .WithOne(d => d.MaterialRequest)
+                .HasForeignKey(d => d.MaterialId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<MaterialTemp>(entity =>

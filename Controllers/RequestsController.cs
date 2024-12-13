@@ -1,21 +1,14 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authorization;
-
 using Microsoft.AspNetCore.Mvc.Rendering;
-
-using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
-using System.Text;
-
 using PAMAPIs.Models;
 using PAMAPIs.Services;
 using PAMAPIs.Data;
-
 using Syncfusion.Pdf;
 using Syncfusion.XlsIO;
 using Syncfusion.XlsIORenderer;
-
 using QRCoder;
 using SkiaSharp;
 
@@ -322,10 +315,6 @@ namespace PAM.Controllers
             }
         }
 
-
-
-
-
         [Authorize]
         [HttpGet("listrequests/{siteId}")]
         public async Task<IActionResult> ListRequests(int siteId, [FromQuery] string status = null)
@@ -436,6 +425,310 @@ namespace PAM.Controllers
             {
                 _logger.LogError(ex, "Error in GetRequestDetails");
                 return StatusCode(500, "An error occurred while retrieving request details.");
+            }
+        }
+
+        private async Task<bool> UserHasAccessToSite(int userId, int siteId)
+        {
+            var user = await _dbContext.Users.FindAsync(userId);
+            if (user == null)
+            {
+                return false;
+            }
+
+            switch (user.RoleId)
+            {
+                case 1: // Admin
+                    return true; // Admin has access to all sites
+
+                case 2:
+                case 3:
+                case 6:
+                case 8:
+                case 9:
+                    // These roles have access to all sites within their assigned countries
+                    // Including additional countries from UserCountries
+
+                    // Get all accessible country IDs for the user
+                    var accessibleCountryIds = await GetAccessibleCountryIdsAsync(user);
+
+                    // Check if the site belongs to any of the accessible countries
+                    var siteCountryId = await _dbContext.Sites
+                        .Where(s => s.SiteId == siteId)
+                        .Select(s => s.CountryId)
+                        .FirstOrDefaultAsync();
+
+                    return accessibleCountryIds.Contains(siteCountryId);
+
+                case 4:
+                case 5:
+                case 7:
+                case 10:
+                    // These roles have access to specific sites and may have additional sites from UserSites
+
+                    // Check if the site is the user's primary site
+                    if (user.SiteId == siteId)
+                    {
+                        return true;
+                    }
+
+                    // Check if the site is in UserSites
+                    return await _dbContext.UserSites
+                        .AnyAsync(us => us.UsrId == userId && us.SiteId == siteId);
+
+                default:
+                    return false; // Other roles don't have access to send requests
+            }
+        }
+
+        [Authorize]
+        [HttpPost("approve/{materialId}")]
+        public async Task<IActionResult> ApproveRequest(int materialId)
+        {
+            try
+            {
+                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                {
+                    return Unauthorized();
+                }
+
+                var user = await _dbContext.Users.FindAsync(userId);
+                if (user == null)
+                {
+                    return NotFound("User not found.");
+                }
+
+                var request = await _dbContext.MaterialRequests.FindAsync(materialId);
+                if (request == null)
+                {
+                    return NotFound("Request not found.");
+                }
+
+                if (!await UserHasAccessToSite(userId, request.SiteId))
+                {
+                    return Forbid("User does not have access to this site.");
+                }
+
+                if (user.RoleId == 7 && request.Status == "Pending Approval")
+                {
+                    // Approve by RoleId 7: Change status to "Pending POs"
+                    request.IsApprovedByPm = true;
+                    request.Status = "Pending POs";
+                }
+                else if (user.RoleId == 3 && request.Status == "Pending POs")
+                {
+                    // Approve by RoleId 3: Change status to "PO in Progress"
+                    request.Status = "PO in Progress";
+                }
+                else
+                {
+                    return BadRequest("Invalid role or request status for approval.");
+                }
+
+                _dbContext.MaterialRequests.Update(request);
+                await _dbContext.SaveChangesAsync();
+
+                return Ok(new { message = "Request approved successfully." });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in ApproveRequest");
+                return StatusCode(500, "An error occurred while processing your request.");
+            }
+        }
+
+        [Authorize]
+        [HttpPost("reject/{materialId}")]
+        public async Task<IActionResult> RejectRequest(int materialId)
+        {
+            try
+            {
+                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                {
+                    return Unauthorized();
+                }
+
+                var user = await _dbContext.Users.FindAsync(userId);
+                if (user == null)
+                {
+                    return NotFound("User not found.");
+                }
+
+                var request = await _dbContext.MaterialRequests.FindAsync(materialId);
+                if (request == null)
+                {
+                    return NotFound("Request not found.");
+                }
+
+                if (!await UserHasAccessToSite(userId, request.SiteId))
+                {
+                    return Forbid("User does not have access to this site.");
+                }
+
+                if ((user.RoleId == 7 && request.Status == "Pending Approval") ||
+                    (user.RoleId == 3 && request.Status == "Pending POs"))
+                {
+                    // Reject by RoleId 7 or RoleId 3
+                    request.Status = "Rejected";
+
+                    _dbContext.MaterialRequests.Update(request);
+                    await _dbContext.SaveChangesAsync();
+
+                    return Ok(new { message = "Request rejected successfully." });
+                }
+                else
+                {
+                    return BadRequest("Invalid role or request status for rejection.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in RejectRequest");
+                return StatusCode(500, "An error occurred while processing your request.");
+            }
+        }
+
+        [Authorize]
+        [HttpPut("edit/{materialId}")]
+        public async Task<IActionResult> EditMaterialRequest(int materialId, [FromBody] UpdateMaterialRequestModel model)
+        {
+            try
+            {
+                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                {
+                    return Unauthorized();
+                }
+
+                var user = await _dbContext.Users.FindAsync(userId);
+                if (user == null)
+                {
+                    return NotFound("User not found.");
+                }
+
+                if (!CanUserSendRequests(user.RoleId))
+                {
+                    return Forbid("User does not have permission to edit requests.");
+                }
+
+                var request = await _dbContext.MaterialRequests
+                    .Include(r => r.MaterialDetails)
+                    .FirstOrDefaultAsync(r => r.MaterialId == materialId);
+
+                if (request == null)
+                {
+                    return NotFound("Request not found.");
+                }
+
+                if (!await UserHasAccessToSite(userId, request.SiteId))
+                {
+                    return Forbid("User does not have access to this site.");
+                }
+
+                if (request.Status != "Pending Approval" && request.Status != "Rejected")
+                {
+                    return BadRequest("Only requests with status 'Pending Approval' or 'Rejected' can be edited.");
+                }
+
+                // Update request fields
+                request.Remarks = model.Remarks ?? request.Remarks;
+                request.Status = "Pending Approval"; // Reset status if editing a rejected request
+                request.IsApprovedByPm = false;
+
+                // Update material details if provided
+                if (model.Items != null && model.Items.Any())
+                {
+                    // Remove existing details
+                    _dbContext.MaterialDetails.RemoveRange(request.MaterialDetails);
+
+                    // Add updated details
+                    var itemIds = model.Items.Select(i => i.ItemId).ToList();
+                    var items = await _dbContext.Items
+                        .Where(i => itemIds.Contains(i.ItemId))
+                        .Select(i => new { i.ItemId, i.CategoryId })
+                        .ToListAsync();
+
+                    var itemCategoryMap = items.ToDictionary(i => i.ItemId, i => i.CategoryId);
+
+                    foreach (var item in model.Items)
+                    {
+                        if (!itemCategoryMap.TryGetValue(item.ItemId, out int? categoryId))
+                        {
+                            return BadRequest($"Invalid ItemId: {item.ItemId}");
+                        }
+
+                        var newDetail = new MaterialDetail
+                        {
+                            MaterialId = request.MaterialId,
+                            ItemId = item.ItemId,
+                            Quantity = item.Quantity,
+                            CodeId = item.CostCodeId,
+                            SubId = item.SubId,
+                            SiteId = request.SiteId,
+                            CategoryId = categoryId.Value,
+                            UsrId = userId
+                        };
+
+                        _dbContext.MaterialDetails.Add(newDetail);
+                    }
+                }
+
+                _dbContext.MaterialRequests.Update(request);
+                await _dbContext.SaveChangesAsync();
+
+                return Ok(new { message = "Material request updated successfully.", requestId = request.MaterialId });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in EditMaterialRequest");
+                return StatusCode(500, "An error occurred while processing your request.");
+            }
+        }
+        private async Task<List<int>> GetAccessibleCountryIdsAsync(User user)
+        {
+            var countryIds = new List<int>();
+
+            // Add primary CountryId if it's set
+            if (user.CountryId != 0)
+            {
+                countryIds.Add(user.CountryId);
+            }
+
+            // Add additional countries from UserCountries
+            var additionalCountryIds = await _dbContext.UserCountries
+                .Where(uc => uc.UsrId == user.UsrId)
+                .Select(uc => uc.CountryId)
+                .ToListAsync();
+
+            countryIds.AddRange(additionalCountryIds);
+
+            return countryIds.Distinct().ToList();
+        }
+
+        private bool CanUserSendRequests(int roleId)
+        {
+            return roleId == 4 || roleId == 5 || roleId == 7 || roleId == 10;
+        }
+
+        private async Task DeleteTemMaterialRequestItemsAsync(int userId, int siteId)
+        {
+            try
+            {
+                var getData = await _dbContext.MaterialTemps
+                   .Where(t => t.SiteId == siteId && t.UsrId == userId)
+                   .ToListAsync();
+
+                if (getData.Any())
+                {
+                    _dbContext.MaterialTemps.RemoveRange(getData);
+                    await _dbContext.SaveChangesAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in DeleteTemMaterialRequestItemsAsync");
             }
         }
 
@@ -661,121 +954,10 @@ namespace PAM.Controllers
             worksheet.PageSetup.CenterHeaderImage = syncfusionImage;
             worksheet.PageSetup.CenterHeader = "&G";
         }
-        private async Task<bool> UserHasAccessToSite(int userId, int siteId)
+        public class UpdateMaterialRequestModel
         {
-            var user = await _dbContext.Users.FindAsync(userId);
-            if (user == null)
-            {
-                return false;
-            }
-
-            switch (user.RoleId)
-            {
-                case 1: // Admin
-                    return true; // Admin has access to all sites
-
-                case 2:
-                case 3:
-                case 6:
-                case 8:
-                case 9:
-                    // These roles have access to all sites within their assigned countries
-                    // Including additional countries from UserCountries
-
-                    // Get all accessible country IDs for the user
-                    var accessibleCountryIds = await GetAccessibleCountryIdsAsync(user);
-
-                    // Check if the site belongs to any of the accessible countries
-                    var siteCountryId = await _dbContext.Sites
-                        .Where(s => s.SiteId == siteId)
-                        .Select(s => s.CountryId)
-                        .FirstOrDefaultAsync();
-
-                    return accessibleCountryIds.Contains(siteCountryId);
-
-                case 4:
-                case 5:
-                case 7:
-                case 10:
-                    // These roles have access to specific sites and may have additional sites from UserSites
-
-                    // Check if the site is the user's primary site
-                    if (user.SiteId == siteId)
-                    {
-                        return true;
-                    }
-
-                    // Check if the site is in UserSites
-                    return await _dbContext.UserSites
-                        .AnyAsync(us => us.UsrId == userId && us.SiteId == siteId);
-
-                default:
-                    return false; // Other roles don't have access to send requests
-            }
-        }
-        private async Task<List<int>> GetAccessibleCountryIdsAsync(User user)
-        {
-            var countryIds = new List<int>();
-
-            // Add primary CountryId if it's set
-            if (user.CountryId != 0)
-            {
-                countryIds.Add(user.CountryId);
-            }
-
-            // Add additional countries from UserCountries
-            var additionalCountryIds = await _dbContext.UserCountries
-                .Where(uc => uc.UsrId == user.UsrId)
-                .Select(uc => uc.CountryId)
-                .ToListAsync();
-
-            countryIds.AddRange(additionalCountryIds);
-
-            return countryIds.Distinct().ToList();
-        }
-
-        private bool CanUserSendRequests(int roleId)
-        {
-            return roleId == 4 || roleId == 5 || roleId == 7 || roleId == 10;
-        }
-
-        private async Task DeleteTemMaterialRequestItemsAsync(int userId, int siteId)
-        {
-            try
-            {
-                var getData = await _dbContext.MaterialTemps
-                   .Where(t => t.SiteId == siteId && t.UsrId == userId)
-                   .ToListAsync();
-
-                if (getData.Any())
-                {
-                    _dbContext.MaterialTemps.RemoveRange(getData);
-                    await _dbContext.SaveChangesAsync();
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in DeleteTemMaterialRequestItemsAsync");
-            }
-        }
-
-        private async Task<List<SelectListItem>> PopulateSubAsync(int countryId)
-        {
-            try
-            {
-                var subcontractors = await _dbContext.SubContractors
-                    .Where(c => c.SubName != "Returned to Supplier" && (c.CountryId == countryId || c.CountryId == 0))
-                    .OrderBy(s => s.SubName)
-                    .Select(s => new SelectListItem { Value = s.SubId.ToString(), Text = s.SubName })
-                    .ToListAsync();
-
-                return subcontractors;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error in PopulateSubAsync");
-                return new List<SelectListItem>();
-            }
+            public string Remarks { get; set; }
+            public List<MaterialRequestItemModel> Items { get; set; }
         }
         public class NewMaterialRequestModel
         {
@@ -788,7 +970,7 @@ namespace PAM.Controllers
             public int ItemId { get; set; }
             public double Quantity { get; set; }
             public int CostCodeId { get; set; }
-            public int SubId { get; set; } // Add this line
+            public int SubId { get; set; }
         }
     }
 }

@@ -28,4 +28,7 @@ public partial class MaterialRequest
 
     [ForeignKey("SiteId")]
     public virtual Site GetSites { get; set; }
+
+    // Navigation property to MaterialDetails
+    public ICollection<MaterialDetail> MaterialDetails { get; set; }
 }
