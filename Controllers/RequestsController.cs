@@ -11,6 +11,7 @@ using Syncfusion.XlsIO;
 using Syncfusion.XlsIORenderer;
 using QRCoder;
 using SkiaSharp;
+using System.ComponentModel.DataAnnotations;
 
 namespace PAM.Controllers
 {
@@ -190,50 +191,53 @@ namespace PAM.Controllers
         {
             try
             {
+                // Log request entry
+                _logger.LogInformation("Received a request to create a new material request for siteId: {siteId}", siteId);
+
+                // Validate User
                 var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
                 if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
                 {
+                    _logger.LogWarning("Unauthorized access attempt with missing or invalid user claim.");
                     return Unauthorized();
                 }
 
                 var user = await _dbContext.Users.FindAsync(userId);
                 if (user == null)
                 {
+                    _logger.LogWarning("User with ID {userId} not found.", userId);
                     return NotFound("User not found.");
                 }
 
                 if (!CanUserSendRequests(user.RoleId))
                 {
+                    _logger.LogWarning("User with ID {userId} does not have permission to send requests.", userId);
                     return Forbid("User does not have permission to send requests.");
                 }
 
                 if (!await UserHasAccessToSite(userId, siteId))
                 {
+                    _logger.LogWarning("User with ID {userId} does not have access to siteId {siteId}.", userId, siteId);
                     return Forbid("User does not have access to the specified site.");
                 }
 
+                // Validate Site and Country
                 string siteCode = _common.GetSiteCode(siteId);
-
-                var site = await _dbContext.Sites
-                    .FirstOrDefaultAsync(s => s.SiteId == siteId);
-
+                var site = await _dbContext.Sites.FirstOrDefaultAsync(s => s.SiteId == siteId);
                 if (site == null)
                 {
+                    _logger.LogWarning("Site with ID {siteId} not found.", siteId);
                     return NotFound("Site not found.");
                 }
 
-                int countryId = site.CountryId;
-
-                var country = await _dbContext.Countries
-                    .FirstOrDefaultAsync(c => c.CountryId == countryId);
-
+                var country = await _dbContext.Countries.FirstOrDefaultAsync(c => c.CountryId == site.CountryId);
                 if (country == null)
                 {
+                    _logger.LogWarning("Country with ID {countryId} not found.", site.CountryId);
                     return NotFound("Country not found.");
                 }
 
-                string countryCode = country.CountryCode;
-
+                // Generate Reference Number
                 int latestRequestNumber = await _dbContext.MaterialRequests
                     .Where(m => m.SiteId == siteId)
                     .OrderByDescending(o => o.MaterialId)
@@ -241,10 +245,12 @@ namespace PAM.Controllers
                     .FirstOrDefaultAsync();
 
                 int newRequestNumber = latestRequestNumber + 1;
-                string refNumber = $"REQ-{siteCode}-{newRequestNumber:D4}-{countryCode}";
+                string refNumber = $"REQ-{siteCode}-{newRequestNumber:D4}-{country.CountryCode}";
 
+                _logger.LogInformation("Generated reference number: {refNumber}", refNumber);
+
+                // Create Material Request
                 bool isPmRole = user.RoleId == 7 || user.RoleId == 10;
-
                 var newRequest = new MaterialRequest
                 {
                     MaterialNumber = newRequestNumber,
@@ -260,21 +266,25 @@ namespace PAM.Controllers
                 _dbContext.MaterialRequests.Add(newRequest);
                 await _dbContext.SaveChangesAsync();
 
+                // Validate Items - Use Contains with plain integer list
                 var itemIds = model.Items.Select(i => i.ItemId).ToList();
+
                 var items = await _dbContext.Items
-                    .Where(i => itemIds.Contains(i.ItemId))
+                    .Where(i => itemIds.Contains(i.ItemId)) // EF Core translates this to SQL IN clause
                     .Select(i => new { i.ItemId, i.CategoryId })
                     .ToListAsync();
 
-                var itemCategoryMap = items.ToDictionary(i => i.ItemId, i => i.CategoryId);
+                if (items.Count != itemIds.Count)
+                {
+                    var missingItemIds = itemIds.Except(items.Select(i => i.ItemId)).ToList();
+                    _logger.LogWarning("Invalid Item IDs found: {MissingItemIds}", missingItemIds);
+                    return BadRequest($"One or more Item IDs are invalid: {string.Join(", ", missingItemIds)}");
+                }
 
+                // Add Material Details
                 foreach (var item in model.Items)
                 {
-                    if (!itemCategoryMap.TryGetValue(item.ItemId, out int? categoryId))
-                    {
-                        return BadRequest($"Invalid ItemId: {item.ItemId}");
-                    }
-
+                    var categoryId = items.First(i => i.ItemId == item.ItemId).CategoryId;
                     var newDetail = new MaterialDetail
                     {
                         MaterialId = newRequest.MaterialId,
@@ -292,18 +302,18 @@ namespace PAM.Controllers
 
                 await _dbContext.SaveChangesAsync();
 
+                // Cleanup Temporary Data
                 await DeleteTemMaterialRequestItemsAsync(userId, siteId);
 
+                // Notify Project Managers
                 var projectManagers = await _dbContext.Users
                     .Where(u => u.RoleId == 7 && u.SiteId == siteId)
                     .ToListAsync();
 
-                if (projectManagers.Any())
+                foreach (var pm in projectManagers)
                 {
-                    foreach (var pm in projectManagers)
-                    {
-                        // Implement your notification logic here
-                    }
+                    _logger.LogInformation("Notifying project manager with ID: {pmId}", pm.UsrId);
+                    // Implement notification logic here
                 }
 
                 return Ok(new { message = "Material request created successfully", requestId = newRequest.MaterialId, refNumber });
@@ -314,6 +324,7 @@ namespace PAM.Controllers
                 return StatusCode(500, "An error occurred while processing your request.");
             }
         }
+
 
         [Authorize]
         [HttpGet("listrequests/{siteId}")]
@@ -507,7 +518,8 @@ namespace PAM.Controllers
 
                 if (!await UserHasAccessToSite(userId, request.SiteId))
                 {
-                    return Forbid("User does not have access to this site.");
+                    // Return 403 Forbidden with a custom message
+                    return StatusCode(StatusCodes.Status403Forbidden, "User does not have access to this site.");
                 }
 
                 if (user.RoleId == 7 && request.Status == "Pending Approval")
@@ -540,8 +552,13 @@ namespace PAM.Controllers
 
         [Authorize]
         [HttpPost("reject/{materialId}")]
-        public async Task<IActionResult> RejectRequest(int materialId)
+        public async Task<IActionResult> RejectRequest(int materialId, [FromBody] RejectRequestDto rejectRequestDto)
         {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
             try
             {
                 var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
@@ -564,14 +581,23 @@ namespace PAM.Controllers
 
                 if (!await UserHasAccessToSite(userId, request.SiteId))
                 {
-                    return Forbid("User does not have access to this site.");
+                    // Return 403 Forbidden with a custom message
+                    return StatusCode(StatusCodes.Status403Forbidden, "User does not have access to this site.");
                 }
 
-                if ((user.RoleId == 7 && request.Status == "Pending Approval") ||
-                    (user.RoleId == 3 && request.Status == "Pending POs"))
+                // Determine if the user has the authority to reject based on RoleId and Status
+                bool canReject = (user.RoleId == 7 && request.Status == "Pending Approval") ||
+                                 (user.RoleId == 3 && request.Status == "Pending POs");
+
+                if (canReject)
                 {
-                    // Reject by RoleId 7 or RoleId 3
+                    // Construct the rejection note
+                    string formattedRejectionNote = $"Rejected by {user.UserName} because of: {rejectRequestDto.RejectionNote}";
+
+                    // Update the MaterialRequest entity
                     request.Status = "Rejected";
+                    request.RejectionNote = formattedRejectionNote;
+                    request.UsrId = userId; // Assuming UsrId tracks the user who made the last update
 
                     _dbContext.MaterialRequests.Update(request);
                     await _dbContext.SaveChangesAsync();
@@ -686,6 +712,7 @@ namespace PAM.Controllers
                 return StatusCode(500, "An error occurred while processing your request.");
             }
         }
+
         private async Task<List<int>> GetAccessibleCountryIdsAsync(User user)
         {
             var countryIds = new List<int>();
@@ -964,7 +991,12 @@ namespace PAM.Controllers
             public string Remarks { get; set; }
             public List<MaterialRequestItemModel> Items { get; set; }
         }
-
+        public class RejectRequestDto
+        {
+            [Required]
+            [StringLength(500, ErrorMessage = "Rejection note cannot exceed 500 characters.")]
+            public string RejectionNote { get; set; }
+        }
         public class MaterialRequestItemModel
         {
             public int ItemId { get; set; }
