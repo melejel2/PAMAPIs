@@ -311,7 +311,7 @@ namespace PAM.Controllers
 
                 if (!await UserHasAccessToSite(userId, siteId))
                 {
-                    return Forbid("User does not have access to the specified site.");
+                    return StatusCode(StatusCodes.Status403Forbidden, "User does not have access to the specified site.");
                 }
 
                 var query = _dbContext.MaterialRequests.Where(r => r.SiteId == siteId);
@@ -343,6 +343,7 @@ namespace PAM.Controllers
                 return StatusCode(500, "An error occurred while retrieving requests.");
             }
         }
+
 
         [Authorize]
         [HttpGet("requestdetails/{materialId}")]
@@ -642,19 +643,40 @@ namespace PAM.Controllers
             switch (user.RoleId)
             {
                 case 1: // Admin
-                    return true; // Admin has access to all sites, but can't send requests
+                    return true; // Admin has access to all sites
 
-                case 4: // Site User
-                case 5: // Warehouse Manager
-                case 7: // Project Manager
-                case 8: // Operations Manager
-                        // These roles have access to specific sites and can send requests
-                    if (user.SiteId == siteId) // User's default site
+                case 2:
+                case 3:
+                case 6:
+                case 8:
+                case 9:
+                    // These roles have access to all sites within their assigned countries
+                    // Including additional countries from UserCountries
+
+                    // Get all accessible country IDs for the user
+                    var accessibleCountryIds = await GetAccessibleCountryIdsAsync(user);
+
+                    // Check if the site belongs to any of the accessible countries
+                    var siteCountryId = await _dbContext.Sites
+                        .Where(s => s.SiteId == siteId)
+                        .Select(s => s.CountryId)
+                        .FirstOrDefaultAsync();
+
+                    return accessibleCountryIds.Contains(siteCountryId);
+
+                case 4:
+                case 5:
+                case 7:
+                case 10:
+                    // These roles have access to specific sites and may have additional sites from UserSites
+
+                    // Check if the site is the user's primary site
+                    if (user.SiteId == siteId)
                     {
                         return true;
                     }
 
-                    // Check UserSites table for additional site access
+                    // Check if the site is in UserSites
                     return await _dbContext.UserSites
                         .AnyAsync(us => us.UsrId == userId && us.SiteId == siteId);
 
@@ -662,9 +684,30 @@ namespace PAM.Controllers
                     return false; // Other roles don't have access to send requests
             }
         }
+        private async Task<List<int>> GetAccessibleCountryIdsAsync(User user)
+        {
+            var countryIds = new List<int>();
+
+            // Add primary CountryId if it's set
+            if (user.CountryId != 0)
+            {
+                countryIds.Add(user.CountryId);
+            }
+
+            // Add additional countries from UserCountries
+            var additionalCountryIds = await _dbContext.UserCountries
+                .Where(uc => uc.UsrId == user.UsrId)
+                .Select(uc => uc.CountryId)
+                .ToListAsync();
+
+            countryIds.AddRange(additionalCountryIds);
+
+            return countryIds.Distinct().ToList();
+        }
+
         private bool CanUserSendRequests(int roleId)
         {
-            return roleId == 4 || roleId == 5 || roleId == 7 || roleId == 8;
+            return roleId == 4 || roleId == 5 || roleId == 7 || roleId == 10;
         }
 
         private async Task DeleteTemMaterialRequestItemsAsync(int userId, int siteId)
