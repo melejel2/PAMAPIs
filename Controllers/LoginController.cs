@@ -37,7 +37,7 @@ namespace PAM.Controllers
             _configuration = configuration;
         }
 
-        private string GenerateJwtToken(User user)
+        private string GenerateJwtToken(User user, string countryName, string siteName)
         {
             var jwtKey = _configuration["Jwt:Key"];
             var jwtIssuer = _configuration["Jwt:Issuer"];
@@ -53,7 +53,9 @@ namespace PAM.Controllers
                 new Claim(ClaimTypes.Name, user.UserName),
                 new Claim(ClaimTypes.Role, user.RoleId.ToString()),
                 new Claim("CountryId", user.CountryId.ToString()),
-                new Claim("SiteId", user.SiteId.ToString())
+                new Claim("SiteId", user.SiteId.ToString()),
+                new Claim("CountryName", countryName ?? string.Empty),
+                new Claim("SiteName", siteName ?? string.Empty)
             };
 
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
@@ -89,7 +91,27 @@ namespace PAM.Controllers
                     return Unauthorized("Invalid email or password.");
                 }
 
-                var token = GenerateJwtToken(user);
+                // Fetch CountryName
+                string countryName = null;
+                if (user.CountryId != 0)
+                {
+                    var country = await _dbContext.Countries
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(c => c.CountryId == user.CountryId);
+                    countryName = country?.CountryName;
+                }
+
+                // Fetch SiteName
+                string siteName = null;
+                if (user.SiteId != 0)
+                {
+                    var site = await _dbContext.Sites
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(s => s.SiteId == user.SiteId);
+                    siteName = site?.SiteName;
+                }
+
+                var token = GenerateJwtToken(user, countryName, siteName);
 
                 user.LastLogin = DateTime.UtcNow;
                 _dbContext.Entry(user).State = EntityState.Modified;
@@ -97,7 +119,11 @@ namespace PAM.Controllers
 
                 if (!user.UpdatePass)
                 {
-                    return Ok(new { requirePasswordUpdate = true, token });
+                    return Ok(new
+                    {
+                        requirePasswordUpdate = true,
+                        token
+                    });
                 }
 
                 return Ok(new
@@ -107,6 +133,8 @@ namespace PAM.Controllers
                     roleid = user.RoleId,
                     countryid = user.CountryId,
                     siteid = user.SiteId,
+                    countryName = countryName,
+                    siteName = siteName,
                     updatepass = user.UpdatePass,
                     requirePasswordUpdate = !user.UpdatePass
                 });
@@ -402,6 +430,7 @@ namespace PAM.Controllers
 
             return countryIds.Distinct().ToList();
         }
+
         public class LoginModel
         {
             public string Email { get; set; }
