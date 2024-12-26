@@ -408,7 +408,10 @@ namespace PAM.Controllers
                         d.SubId,
                         d.CategoryId,
                         d.ItemId,
-                        d.CodeId
+                        d.CodeId,
+                        d.GetItems.ItemName,
+                        d.GetItems.ItemUnit,
+                        d.GetCost_Codes.Code,
                     })
                     .ToListAsync();
 
