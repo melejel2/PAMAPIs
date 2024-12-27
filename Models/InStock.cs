@@ -13,7 +13,7 @@ public partial class InStock
 
     public double? Quantity { get; set; }
 
-    public DateOnly? Date { get; set; }
+    public DateTime? Date { get; set; }
 
     public int? ItemId { get; set; }
 
@@ -26,4 +26,9 @@ public partial class InStock
     public int? UsrId { get; set; }
 
     public string? SuppDeliveryNote { get; set; }
+
+    public int POId { get; set; }
+
+    public int? PODetailId { get; set; }
+
 }
