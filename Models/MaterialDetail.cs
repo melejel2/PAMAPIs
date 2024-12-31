@@ -37,16 +37,12 @@ public partial class MaterialDetail
     public virtual Site GetSites { get; set; }
 
     [ForeignKey("MaterialId")]
-    public virtual MaterialRequest GetMaterial_Request { get; set; }
+    public virtual MaterialRequest MaterialRequest { get; set; }
 
     [ForeignKey("SubId")]
     public virtual SubContractor GetSubContractors { get; set; }
 
     [ForeignKey("UsrId")]
     public virtual User GetUsers { get; set; }
-
-    // Navigation property to MaterialRequest
-    public MaterialRequest MaterialRequest { get; set; }
-
 
 }
