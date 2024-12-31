@@ -174,6 +174,7 @@ namespace PAM.Controllers
             }
         }
 
+
         [Authorize]
         [HttpGet("usersites")]
         public async Task<IActionResult> GetUserSites([FromQuery] int countryId)
@@ -192,7 +193,21 @@ namespace PAM.Controllers
                     return NotFound("User not found.");
                 }
 
-                var sites = await GetUserSitesAsync(user, countryId);
+                // Determine accessible site IDs for the user
+                List<int> accessibleSiteIds = await GetAccessibleSiteIdsAsync(user, countryId);
+
+                // Fetch sites within the specified country that the user has access to
+                var sites = await _dbContext.Sites
+                    .Where(s => s.CountryId == countryId && accessibleSiteIds.Contains(s.SiteId))
+                    .Select(s => new
+                    {
+                        s.SiteId,
+                        s.SiteName,
+                        s.SiteCode,
+                        s.CountryId
+                    })
+                    .ToListAsync();
+
                 return Ok(sites);
             }
             catch (Exception ex)
@@ -200,6 +215,79 @@ namespace PAM.Controllers
                 _logger.LogError(ex, "Error in GetUserSites");
                 return StatusCode(500, "An error occurred while retrieving user sites.");
             }
+        }
+        // Modified Helper Method
+        private async Task<List<int>> GetAccessibleSiteIdsAsync(User user, int countryId)
+        {
+            List<int> accessibleSiteIds = new List<int>();
+
+            switch (user.RoleId)
+            {
+                case 1: // Admin
+                        // Admin has access to all sites
+                    accessibleSiteIds = await _dbContext.Sites
+                        .Where(s => s.CountryId == countryId)
+                        .Select(s => s.SiteId)
+                        .ToListAsync();
+                    break;
+
+                case 2:
+                case 3:
+                case 6:
+                case 8:
+                case 9:
+                    // Modify these roles to have site-specific access instead of country-wide
+                    accessibleSiteIds = await _dbContext.UserSites
+                        .Where(us => us.UsrId == user.UsrId)
+                        .Join(_dbContext.Sites,
+                              us => us.SiteId,
+                              s => s.SiteId,
+                              (us, s) => new { us, s })
+                        .Where(joined => joined.s.CountryId == countryId)
+                        .Select(joined => joined.s.SiteId)
+                        .ToListAsync();
+
+                    // Include primary site if it belongs to the requested country
+                    if (user.SiteId != 0)
+                    {
+                        var primarySite = await _dbContext.Sites
+                            .FirstOrDefaultAsync(s => s.SiteId == user.SiteId && s.CountryId == countryId);
+                        if (primarySite != null && !accessibleSiteIds.Contains(primarySite.SiteId))
+                        {
+                            accessibleSiteIds.Add(primarySite.SiteId);
+                        }
+                    }
+                    break;
+
+                case 4:
+                case 5:
+                case 7:
+                case 10:
+                    // These roles have access to specific sites
+                    accessibleSiteIds = await _dbContext.UserSites
+                        .Where(us => us.UsrId == user.UsrId && _dbContext.Sites.Any(s => s.SiteId == us.SiteId && s.CountryId == countryId))
+                        .Select(us => us.SiteId)
+                        .ToListAsync();
+
+                    // Include primary site if it belongs to the requested country
+                    if (user.SiteId != 0)
+                    {
+                        var primarySite = await _dbContext.Sites
+                            .FirstOrDefaultAsync(s => s.SiteId == user.SiteId && s.CountryId == countryId);
+                        if (primarySite != null && !accessibleSiteIds.Contains(primarySite.SiteId))
+                        {
+                            accessibleSiteIds.Add(primarySite.SiteId);
+                        }
+                    }
+                    break;
+
+                default:
+                    // Other roles have no site access
+                    accessibleSiteIds = new List<int>();
+                    break;
+            }
+
+            return accessibleSiteIds.Distinct().ToList();
         }
 
         private async Task<List<Country>> GetUserCountriesAsync(User user)
@@ -281,154 +369,6 @@ namespace PAM.Controllers
                 default:
                     return new List<Country>();
             }
-        }
-
-        private async Task<List<Site>> GetUserSitesAsync(User user, int countryId)
-        {
-            switch (user.RoleId)
-            {
-                case 1: // Admin
-                    // Admin has full access to all sites of the requested country
-                    return await _dbContext.Sites
-                        .Where(s => s.CountryId == countryId)
-                        .ToListAsync();
-
-                case 2:
-                case 3:
-                case 6:
-                case 8:
-                case 9:
-                    // These roles have a primary country and possibly additional countries (full access to those countries).
-                    var accessibleCountries2x = await GetAccessibleCountriesFor2xRoles(user);
-                    if (!accessibleCountries2x.Contains(countryId))
-                    {
-                        return new List<Site>();
-                    }
-                    return await _dbContext.Sites
-                        .Where(s => s.CountryId == countryId)
-                        .ToListAsync();
-
-                case 4:
-                case 5:
-                case 7:
-                case 10:
-                    // For these roles:
-                    // - If countryId == user's primary CountryId and not in UserCountries, return the primary site plus any UserSites in that country.
-                    // - If countryId is in UserCountries, return all sites in that country.
-                    // - If countryId is only from UserSites, return only those assigned sites.
-
-                    var (primaryCountryId, primarySiteId) = (user.CountryId, user.SiteId);
-
-                    // Get all userCountries and userSites data
-                    var userCountries = await GetUserCountriesFor4xRoles(user);
-                    var userCountryIds = userCountries.Select(c => c.CountryId).Distinct().ToList();
-
-                    // Check if requested country is user's primary country
-                    bool isPrimaryCountry = (countryId == primaryCountryId && primaryCountryId != 0);
-
-                    // Check if requested country is in userCountries
-                    bool inUserCountries = userCountryIds.Contains(countryId);
-
-                    // Collect sites
-                    if (inUserCountries)
-                    {
-                        // Full access to that country's sites
-                        return await _dbContext.Sites
-                            .Where(s => s.CountryId == countryId)
-                            .ToListAsync();
-                    }
-
-                    // If not in userCountries:
-                    // Check userSites for sites in the requested country
-                    var userSiteIds = await _dbContext.UserSites
-                        .Where(us => us.UsrId == user.UsrId)
-                        .Select(us => us.SiteId)
-                        .ToListAsync();
-
-                    var userSitesInCountry = await _dbContext.Sites
-                        .Where(s => userSiteIds.Contains(s.SiteId) && s.CountryId == countryId)
-                        .ToListAsync();
-
-                    if (isPrimaryCountry)
-                    {
-                        // Add primary site if it belongs to this country
-                        if (primarySiteId != 0)
-                        {
-                            var primarySite = await _dbContext.Sites
-                                .FirstOrDefaultAsync(s => s.SiteId == primarySiteId && s.CountryId == countryId);
-                            if (primarySite != null && !userSitesInCountry.Any(s => s.SiteId == primarySite.SiteId))
-                            {
-                                userSitesInCountry.Add(primarySite);
-                            }
-                        }
-                        return userSitesInCountry;
-                    }
-                    else
-                    {
-                        // Country is not primary and not in userCountries, so we only return sites from userSites that match this country
-                        return userSitesInCountry;
-                    }
-
-                default:
-                    return new List<Site>();
-            }
-        }
-
-        private async Task<List<Country>> GetUserCountriesFor4xRoles(User user)
-        {
-            var countries = new List<Country>();
-
-            if (user.CountryId != 0)
-            {
-                var primaryCountry = await _dbContext.Countries.FindAsync(user.CountryId);
-                if (primaryCountry != null) countries.Add(primaryCountry);
-            }
-
-            var additionalCountries = await _dbContext.UserCountries
-                .Where(uc => uc.UsrId == user.UsrId)
-                .Join(_dbContext.Countries,
-                    uc => uc.CountryId,
-                    c => c.CountryId,
-                    (uc, c) => c)
-                .ToListAsync();
-
-            countries.AddRange(additionalCountries);
-
-            var countriesFromUserSites = await _dbContext.UserSites
-                .Where(us => us.UsrId == user.UsrId)
-                .Join(_dbContext.Sites,
-                    us => us.SiteId,
-                    s => s.SiteId,
-                    (us, s) => s.CountryId)
-                .Distinct()
-                .Join(_dbContext.Countries,
-                    cid => cid,
-                    c => c.CountryId,
-                    (cid, c) => c)
-                .ToListAsync();
-
-            countries.AddRange(countriesFromUserSites);
-
-            return countries.Distinct().ToList();
-        }
-
-        private async Task<List<int>> GetAccessibleCountriesFor2xRoles(User user)
-        {
-            var countryIds = new List<int>();
-
-            if (user.CountryId != 0)
-            {
-                countryIds.Add(user.CountryId);
-            }
-
-            var additionalCountryIds = await _dbContext.UserCountries
-                .Where(uc => uc.UsrId == user.UsrId)
-                .Select(uc => uc.CountryId)
-                .ToListAsync();
-
-            countryIds.AddRange(additionalCountryIds);
-
-            return countryIds.Distinct().ToList();
         }
 
         public class LoginModel
