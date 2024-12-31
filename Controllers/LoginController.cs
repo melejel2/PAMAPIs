@@ -204,6 +204,7 @@ namespace PAM.Controllers
                         s.SiteId,
                         s.SiteName,
                         s.SiteCode,
+                        s.Acronym, // Added Acronym
                         s.CountryId
                     })
                     .ToListAsync();
@@ -216,6 +217,8 @@ namespace PAM.Controllers
                 return StatusCode(500, "An error occurred while retrieving user sites.");
             }
         }
+
+
         // Modified Helper Method
         private async Task<List<int>> GetAccessibleSiteIdsAsync(User user, int countryId)
         {
