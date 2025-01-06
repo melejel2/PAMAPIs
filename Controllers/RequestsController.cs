@@ -133,26 +133,23 @@ namespace PAM.Controllers
         }
 
         [Authorize]
-        [HttpGet("searchitems")]
-        public async Task<IActionResult> SearchItems([FromQuery] string searchTerm)
+        [HttpGet("getitems")]
+        public async Task<IActionResult> GetItems()
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(searchTerm))
-                {
-                    return BadRequest("Search term is required.");
-                }
+                // Fetch all items if searchTerm is null or empty
+                var itemsQuery = _dbContext.Items.AsQueryable();
 
-                var items = await _dbContext.Items
-                    .Where(i => i.ItemName.Contains(searchTerm))
-                    .Take(20)
+
+                var items = await itemsQuery
                     .Select(i => new
                     {
-                        ItemId = i.ItemId.ToString(), // Keeping the value as string for compatibility
+                        ItemId = i.ItemId.ToString(),
                         Text = i.ItemName,
                         ItemUnit = i.ItemUnit,
                         CategoryId = i.CategoryId,
-                        SubCategory = i.SubCategory,
+                        //SubCategory = i.SubCategory,
                         Selected = false
                     })
                     .ToListAsync();
@@ -161,10 +158,11 @@ namespace PAM.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in SearchItems");
-                return StatusCode(500, "An error occurred while searching items.");
+                _logger.LogError(ex, "Error in GetItems");
+                return StatusCode(500, "An error occurred while fetching items.");
             }
         }
+
 
         [Authorize]
         [HttpGet("subcontractors")]
