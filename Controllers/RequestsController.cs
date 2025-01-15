@@ -12,6 +12,7 @@ using Syncfusion.XlsIORenderer;
 using QRCoder;
 using SkiaSharp;
 using System.ComponentModel.DataAnnotations;
+using System.Linq;
 
 namespace PAM.Controllers
 {
@@ -523,13 +524,12 @@ namespace PAM.Controllers
                     return StatusCode(StatusCodes.Status403Forbidden, "User does not have access to this site.");
                 }
 
-                if (user.RoleId == 7 && request.Status == "Pending Approval")
+                if (user.RoleId == 7 && request.Status == "Pending Approval" && request.IsApprovedByPm == false)
                 {
-                    // Approve by RoleId 7: Change status to "Pending POs"
+                    // Approve by RoleId 7"
                     request.IsApprovedByPm = true;
-                    request.Status = "Pending POs";
                 }
-                else if (user.RoleId == 3 && request.Status == "Pending POs")
+                else if (user.RoleId == 3 && request.Status == "Pending Approval" && request.IsApprovedByPm == true)
                 {
                     // Approve by RoleId 3: Change status to "PO in Progress"
                     request.Status = "PO in Progress";
@@ -550,6 +550,97 @@ namespace PAM.Controllers
                 return StatusCode(500, "An error occurred while processing your request.");
             }
         }
+
+        [Authorize]
+        [HttpGet("notifications/{siteId}")]
+        public async Task<IActionResult> PopulateNotifications(int siteId)
+        {
+            try
+            {
+                // 1. Validate the current user
+                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                {
+                    return Unauthorized();
+                }
+
+                var user = await _dbContext.Users.FindAsync(userId);
+                if (user == null)
+                {
+                    return NotFound("User not found.");
+                }
+
+                // 2. Check if user has access to the requested site, if necessary
+                //    (Uncomment the lines below if you wish to enforce site-access checks)
+                /*
+                if (!await UserHasAccessToSite(user.UsrId, siteId))
+                {
+                    return Forbid("User does not have access to this site.");
+                }
+                */
+
+                // 3. Build the query based on the user's role
+                IQueryable<MaterialRequest> query = _dbContext.MaterialRequests
+                    .Where(m => m.SiteId == siteId);
+
+                if (user.RoleId == 7 || user.RoleId == 10)
+                {
+                    // Show requests that have not been approved by PM
+                    query = query.Where(r => r.IsApprovedByPm == false);
+                }
+                else if (user.RoleId == 3)
+                {
+                    // Show requests that are approved by PM and are Pending Approval
+                    query = query.Where(r => r.IsApprovedByPm == true && r.Status == "Pending Approval");
+                }
+                else
+                {
+                    // If the user doesn't match the roles above, return an empty list or a 403
+                    return Ok(new List<string>());
+                }
+
+                // 4. Execute the query
+                var requests = await query.ToListAsync();
+
+                // If there are no matching requests, return an empty list
+                if (!requests.Any())
+                {
+                    return Ok(new List<string>());
+                }
+
+                // 5. Fetch the users who created these requests
+                var creatorIds = requests.Select(r => r.UsrId).Distinct().ToList();
+                var creators = await _dbContext.Users
+                    .Where(u => creatorIds.Contains(u.UsrId))
+                    .Select(u => new { u.UsrId, u.UserName })
+                    .ToListAsync();
+
+                // Make a map: UserId -> UserName
+                var userMap = creators.ToDictionary(u => u.UsrId, u => u.UserName);
+
+                // 6. Construct notifications
+                var notifications = requests.Select(r =>
+                {
+                    int key = r.UsrId ?? 0;  // 0 is the default if r.UsrId is null
+                    string creatorName = userMap.ContainsKey(key) ? userMap[key] : "Unknown User";
+
+
+                    return new
+                    {
+                        Message = $"{creatorName} has generated the request number {r.RefNo} that needs your attention."
+                    };
+                });
+
+                // 7. Return the result
+                return Ok(notifications);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in PopulateNotifications");
+                return StatusCode(500, "An error occurred while populating notifications.");
+            }
+        }
+
 
         [Authorize]
         [HttpPost("reject/{materialId}")]

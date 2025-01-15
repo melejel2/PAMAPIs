@@ -227,7 +227,15 @@ namespace PAM.Controllers
             switch (user.RoleId)
             {
                 case 1: // Admin
-                        // Admin has access to all sites
+                        // Admin has access to all sites in the requested country
+                    accessibleSiteIds = await _dbContext.Sites
+                        .Where(s => s.CountryId == countryId)
+                        .Select(s => s.SiteId)
+                        .ToListAsync();
+                    break;
+
+                case 3:
+                    // RoleId = 3 has access to ALL sites in the country
                     accessibleSiteIds = await _dbContext.Sites
                         .Where(s => s.CountryId == countryId)
                         .Select(s => s.SiteId)
@@ -235,22 +243,23 @@ namespace PAM.Controllers
                     break;
 
                 case 2:
-                case 3:
                 case 6:
                 case 8:
                 case 9:
-                    // Modify these roles to have site-specific access instead of country-wide
+                    // These roles now require site-by-site access for the requested country
                     accessibleSiteIds = await _dbContext.UserSites
                         .Where(us => us.UsrId == user.UsrId)
-                        .Join(_dbContext.Sites,
-                              us => us.SiteId,
-                              s => s.SiteId,
-                              (us, s) => new { us, s })
+                        .Join(
+                            _dbContext.Sites,
+                            us => us.SiteId,
+                            s => s.SiteId,
+                            (us, s) => new { us, s }
+                        )
                         .Where(joined => joined.s.CountryId == countryId)
                         .Select(joined => joined.s.SiteId)
                         .ToListAsync();
 
-                    // Include primary site if it belongs to the requested country
+                    // Include the user’s primary site if it belongs to the requested country
                     if (user.SiteId != 0)
                     {
                         var primarySite = await _dbContext.Sites
@@ -266,13 +275,19 @@ namespace PAM.Controllers
                 case 5:
                 case 7:
                 case 10:
-                    // These roles have access to specific sites
+                    // These roles have specific site access (UserSites) plus their primary site if it matches the country
                     accessibleSiteIds = await _dbContext.UserSites
-                        .Where(us => us.UsrId == user.UsrId && _dbContext.Sites.Any(s => s.SiteId == us.SiteId && s.CountryId == countryId))
-                        .Select(us => us.SiteId)
+                        .Where(us => us.UsrId == user.UsrId)
+                        .Join(
+                            _dbContext.Sites,
+                            us => us.SiteId,
+                            s => s.SiteId,
+                            (us, s) => new { us, s }
+                        )
+                        .Where(joined => joined.s.CountryId == countryId)
+                        .Select(joined => joined.s.SiteId)
                         .ToListAsync();
 
-                    // Include primary site if it belongs to the requested country
                     if (user.SiteId != 0)
                     {
                         var primarySite = await _dbContext.Sites
@@ -292,6 +307,7 @@ namespace PAM.Controllers
 
             return accessibleSiteIds.Distinct().ToList();
         }
+
 
         private async Task<List<Country>> GetUserCountriesAsync(User user)
         {
