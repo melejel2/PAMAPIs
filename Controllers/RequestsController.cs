@@ -621,13 +621,13 @@ namespace PAM.Controllers
                 // 6. Construct notifications
                 var notifications = requests.Select(r =>
                 {
-                    int key = r.UsrId ?? 0;  // 0 is the default if r.UsrId is null
+                    int key = r.UsrId ?? 0; // Default to 0 if r.UsrId is null
                     string creatorName = userMap.ContainsKey(key) ? userMap[key] : "Unknown User";
-
 
                     return new
                     {
-                        Message = $"{creatorName} has generated the request number {r.RefNo} that needs your attention."
+                        Message = $"{creatorName} has generated the request number {r.RefNo} that needs your attention.",
+                        MaterialId = r.MaterialId
                     };
                 });
 
