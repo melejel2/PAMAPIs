@@ -586,7 +586,7 @@ namespace PAM.Controllers
                 if (user.RoleId == 7 || user.RoleId == 10)
                 {
                     // Show requests that have not been approved by PM
-                    query = query.Where(r => r.IsApprovedByPm == false);
+                    query = query.Where(r => r.IsApprovedByPm == false && r.Status == "Pending Approval");
                 }
                 else if (user.RoleId == 3)
                 {
@@ -679,7 +679,7 @@ namespace PAM.Controllers
 
                 // Determine if the user has the authority to reject based on RoleId and Status
                 bool canReject = (user.RoleId == 7 && request.Status == "Pending Approval") ||
-                                 (user.RoleId == 3 && request.Status == "Pending POs");
+                                 (user.RoleId == 3 && request.Status == "Pending Approval");
 
                 if (canReject)
                 {
