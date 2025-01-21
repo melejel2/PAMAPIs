@@ -22,6 +22,4 @@ public partial class PayOrderDetail
     public double? CumulQty { get; set; }
 
     public int SiteId { get; set; }
-
-    public bool? IsWarehouseSite { get; set; }
 }
