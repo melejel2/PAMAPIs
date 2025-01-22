@@ -28,4 +28,7 @@ public partial class PoDetail
 
     [ForeignKey("CodeId")]
     public virtual CostCode GetCost_Codes { get; set; }
+
+    [ForeignKey("Poid")]
+    public virtual PurchaseOrder GetPurchase_Order { get; set; }
 }
