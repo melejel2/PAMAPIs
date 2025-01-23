@@ -11,7 +11,10 @@ namespace PAM.Models.EntityModels
         [Key]
         public int OutId { get; set; }
         public int? OutNo { get; set; }
-        public string RefNo { get; set; }
+        
+        // Changed to string? to allow null
+        public string? RefNo { get; set; }
+
         public double? Quantity { get; set; }
         public DateTime? Date { get; set; }
         public int? ItemId { get; set; }
@@ -21,8 +24,12 @@ namespace PAM.Models.EntityModels
         public int? UsrId { get; set; }
         public int? ToSiteId { get; set; }
         public bool? IsApprovedByOP { get; set; }
-        public string Remarks { get; set; }
-        public string OutStockNote { get; set; }
+
+        // Changed to string? to allow null
+        public string? Remarks { get; set; }
+
+        // Changed to string? to allow null
+        public string? OutStockNote { get; set; }
 
         [ForeignKey("ItemId")]
         public virtual Item GetItems { get; set; }
@@ -41,5 +48,23 @@ namespace PAM.Models.EntityModels
 
         [ForeignKey("UsrId")]
         public virtual User GetUsers { get; set; }
+    }
+
+    public class OutStockVM
+    {
+        public int OutId { get; set; }
+        public int? OutNo { get; set; }
+        public string? RefNo { get; set; }
+        public double? Quantity { get; set; }
+        public DateTime? Date { get; set; }
+        public int? ItemId { get; set; }
+        public int? SiteId { get; set; }
+        public int? SubId { get; set; }
+        public int? NumId { get; set; }
+        public int? UsrId { get; set; }
+        public int? ToSiteId { get; set; }
+        public bool? IsApprovedByOP { get; set; }
+        public string? Remarks { get; set; }
+        public string? OutStockNote { get; set; }
     }
 }

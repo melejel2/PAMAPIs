@@ -7,6 +7,7 @@ using PAMAPIs.Data;
 using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.UseUrls("http://localhost:5185", "https://localhost:7185", "https://pamapis.karamentreprises.com/");
 var configuration = builder.Configuration;
 
 // Syncfusion license registration
@@ -55,6 +56,7 @@ builder.Services.AddCors(options =>
             .AllowAnyHeader();
     });
 });
+builder.Services.AddHttpsRedirection(options => { options.HttpsPort = 7185; });
 // Swagger with JWT Authentication
 builder.Services.AddSwaggerGen(c =>
 {
@@ -96,7 +98,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "PAM APIs v1");
-        c.RoutePrefix = "swagger"; // Use "swagger" or "" for root
+        c.RoutePrefix = "";
     });
 }
 else

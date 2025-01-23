@@ -8,6 +8,7 @@ using PAMAPIs.Models;
 using PAMAPIs.Services;
 using System;
 using System.Collections.Generic;
+using System.Data.SqlTypes;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -18,12 +19,12 @@ namespace PAMAPIs.Controllers
     public class StockController : ControllerBase
     {
         private readonly PAMContext _dbContext;
-        private readonly EmailService _emailService;
+        //private readonly EmailService _emailService;
 
-        public StockController(PAMContext dbContext, EmailService emailService)
+        public StockController(PAMContext dbContext)
         {
             _dbContext = dbContext;
-            _emailService = emailService;
+            //_emailService = emailService;
         }
 
         /// <summary>
@@ -121,34 +122,72 @@ namespace PAMAPIs.Controllers
         // ------------------------------------------------------------------------
         // NEW 2: GET STOCK OUT STATUS => "GetStockOutStatus/{siteId}"
         // ------------------------------------------------------------------------
+
         [HttpGet("GetStockOutStatus/{siteId}")]
         public async Task<IActionResult> GetStockOutStatus(int siteId)
         {
             try
             {
-                // Example logic: just aggregate from OutStocks
-                var data = await _dbContext.OutStocks
+                // 1) Attempt to load OutStock rows
+                var outStocks = await _dbContext.OutStocks
+                    .Where(o => o.SiteId == siteId)
+                    .OrderByDescending(o => o.OutId)
+                    .ToListAsync(); // If your model is correct (all needed columns are nullable),
+                                    // EF should not throw SqlNullValueException here anymore.
+
+                // 2) If it succeeds, just return them 
+                //    (or map them to a DTO/VM first if you prefer).
+                return Ok(outStocks);
+            }
+            catch (SqlNullValueException ex)
+            {
+                // 3) We caught the NullValueException. Let's figure out 
+                // which string columns might be null:
+                
+                var nullChecks = await _dbContext.OutStocks
                     .Where(o => o.SiteId == siteId)
                     .Select(o => new
                     {
-                        Item = o.GetItems.ItemName,
-                        Unit = o.GetItems.ItemUnit,
-                        Requested = 0,    // or your own calculation
-                        Ordered = 0,
-                        Received = 0,
-                        Consumed = o.Quantity
+                        o.OutId,
+                        IsRefNoNull        = (o.RefNo == null),
+                        IsOutStockNoteNull = (o.OutStockNote == null),
+                        IsRemarksNull      = (o.Remarks == null)
+                        // Add more columns if needed
                     })
                     .ToListAsync();
 
-                return Ok(data);
+                // Build a debug message
+                var problemRows = new List<string>();
+                foreach (var row in nullChecks)
+                {
+                    var cols = new List<string>();
+                    if (row.IsRefNoNull)        cols.Add("RefNo");
+                    if (row.IsOutStockNoteNull) cols.Add("OutStockNote");
+                    if (row.IsRemarksNull)      cols.Add("Remarks");
+
+                    if (cols.Any())
+                    {
+                        problemRows.Add($"OutId={row.OutId} has NULL in: {string.Join(", ", cols)}");
+                    }
+                }
+
+                var debugInfo = (problemRows.Count == 0)
+                    ? "No obvious null columns found in string fields, but we still got SqlNullValueException."
+                    : string.Join(" | ", problemRows);
+
+                return StatusCode(500, new 
+                { 
+                    message = ex.Message, 
+                    debug = debugInfo 
+                });
             }
             catch (Exception ex)
             {
                 return StatusCode(500, new { message = ex.Message });
             }
-        }
+        }  
 
-
+    
         // ------------------------------------------------------------------------
         // NEW 3: POPULATE SITES FOR "OTHER SITE" => "PopulateSitesForOtherSite"
         // Example to retrieve sites in the same country, excluding the current site
@@ -357,7 +396,7 @@ namespace PAMAPIs.Controllers
             }
         }
 
-      [HttpPost("OutStock")]
+        [HttpPost("OutStock")]
         [Authorize]
         public async Task<IActionResult> CreateOutStock([FromBody] OutStockRequest dto)
         {
@@ -535,7 +574,8 @@ namespace PAMAPIs.Controllers
                     message = "Error in OutStock: " + ex.Message
                 });
             }
-        }        private async Task SendOutStockNotificationAsync(PAM.Models.EntityModels.OutStock outStock)
+        }        
+        private async Task SendOutStockNotificationAsync(PAM.Models.EntityModels.OutStock outStock)
         {
             try
             {
@@ -628,7 +668,7 @@ namespace PAMAPIs.Controllers
 </html>";
 
                 // 9) Send email (assuming you injected an _emailService in this controller).
-                await _emailService.SendEmailAsync(toEmails.ToArray(), subject, messageBody, ccEmails.ToArray());
+                //await _emailService.SendEmailAsync(toEmails.ToArray(), subject, messageBody, ccEmails.ToArray());
 
                 // 10) (Optional) Log the email send in DB if needed
                 // e.g. _dbContext.EmailSendLogs.Add(...)
