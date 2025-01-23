@@ -676,7 +676,7 @@ namespace PAM.Controllers
 
         [Authorize]
         [HttpPost("reject/{materialId}")]
-        public async Task<IActionResult> RejectRequest(int materialId, [FromBody] RejectRequestDto rejectRequestDto)
+        public async Task<IActionResult> RejectRequest(int materialId, string RejectionNote)
         {
             if (!ModelState.IsValid)
             {
@@ -716,7 +716,7 @@ namespace PAM.Controllers
                 if (canReject)
                 {
                     // Construct the rejection note
-                    string formattedRejectionNote = $"Rejected by {user.UserName} because of: {rejectRequestDto.RejectionNote}";
+                    string formattedRejectionNote = $"Rejected by {user.UserName} because of: {RejectionNote}";
 
                     // Update the MaterialRequest entity
                     request.Status = "Rejected";
