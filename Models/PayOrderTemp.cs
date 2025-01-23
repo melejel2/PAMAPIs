@@ -24,6 +24,4 @@ public partial class PayOrderTemp
     public int SiteId { get; set; }
 
     public int? UsrId { get; set; }
-
-    public bool? IsWarehouseSite { get; set; }
 }

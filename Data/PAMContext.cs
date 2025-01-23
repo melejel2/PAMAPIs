@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
+using PAM.Models.EntityModels;
 using PAMAPIs.Models;
 
 namespace PAMAPIs.Data;
@@ -30,8 +31,6 @@ public partial class PAMContext : DbContext
 
     public virtual DbSet<InStock> InStocks { get; set; }
 
-    public virtual DbSet<InWarehouse> InWarehouses { get; set; }
-
     public virtual DbSet<Item> Items { get; set; }
 
     public virtual DbSet<KpiFile> KpiFiles { get; set; }
@@ -43,8 +42,6 @@ public partial class PAMContext : DbContext
     public virtual DbSet<MaterialTemp> MaterialTemps { get; set; }
 
     public virtual DbSet<OutStock> OutStocks { get; set; }
-
-    public virtual DbSet<OutWarehouse> OutWarehouses { get; set; }
 
     public virtual DbSet<PayOrder> PayOrders { get; set; }
 
@@ -103,14 +100,6 @@ public partial class PAMContext : DbContext
     public virtual DbSet<UserSite> UserSites { get; set; }
 
     public virtual DbSet<Vat> Vats { get; set; }
-
-    public virtual DbSet<Warehouse> Warehouses { get; set; }
-
-    public virtual DbSet<WarehouseQuantity> WarehouseQuantities { get; set; }
-
-    public virtual DbSet<WarehouseTemp> WarehouseTemps { get; set; }
-
-    // Removed OnConfiguring to rely on connection from Program.cs
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -179,21 +168,8 @@ public partial class PAMContext : DbContext
 
             entity.ToTable("InStock");
 
-            entity.Property(e => e.PodetailId).HasColumnName("PODetailId");
-            entity.Property(e => e.Poid).HasColumnName("POId");
-            entity.Property(e => e.RefNo)
-                .HasMaxLength(30)
-                .IsUnicode(false);
-        });
-
-        modelBuilder.Entity<InWarehouse>(entity =>
-        {
-            entity.HasKey(e => e.InWareId).HasName("PK_InWarehouse_1");
-
-            entity.ToTable("InWarehouse");
-
-            entity.Property(e => e.PodetailId).HasColumnName("PODetailId");
-            entity.Property(e => e.Poid).HasColumnName("POId");
+            entity.Property(e => e.PODetailId).HasColumnName("PODetailId");
+            entity.Property(e => e.POId).HasColumnName("POId");
             entity.Property(e => e.RefNo)
                 .HasMaxLength(30)
                 .IsUnicode(false);
@@ -256,17 +232,7 @@ public partial class PAMContext : DbContext
                 .IsUnicode(false);
         });
 
-        modelBuilder.Entity<OutWarehouse>(entity =>
-        {
-            entity.HasKey(e => e.OutWareId);
-
-            entity.ToTable("OutWarehouse");
-
-            entity.Property(e => e.RefNo)
-                .HasMaxLength(30)
-                .IsUnicode(false);
-        });
-
+     
         modelBuilder.Entity<PayOrder>(entity =>
         {
             entity.ToTable("PayOrder");
@@ -769,25 +735,6 @@ public partial class PAMContext : DbContext
             entity.ToTable("VAT");
 
             entity.Property(e => e.Vat1).HasColumnName("VAT");
-        });
-
-        modelBuilder.Entity<Warehouse>(entity =>
-        {
-            entity.ToTable("Warehouse");
-        });
-
-        modelBuilder.Entity<WarehouseQuantity>(entity =>
-        {
-            entity.HasKey(e => e.Wqty);
-
-            entity.ToTable("WarehouseQuantity");
-
-            entity.Property(e => e.Wqty).HasColumnName("WQty");
-        });
-
-        modelBuilder.Entity<WarehouseTemp>(entity =>
-        {
-            entity.ToTable("WarehouseTemp");
         });
 
         OnModelCreatingPartial(modelBuilder);

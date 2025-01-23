@@ -337,18 +337,22 @@ namespace PAM.Controllers
                     return Unauthorized();
                 }
 
+                // Check user access to site
                 if (!await UserHasAccessToSite(userId, siteId))
                 {
                     return StatusCode(StatusCodes.Status403Forbidden, "User does not have access to the specified site.");
                 }
 
+                // Base query for the specified site
                 var query = _dbContext.MaterialRequests.Where(r => r.SiteId == siteId);
 
+                // Optionally filter by status if provided
                 if (!string.IsNullOrEmpty(status))
                 {
                     query = query.Where(r => r.Status == status);
                 }
 
+                // Fetch requests including the additional calculated fields
                 var requests = await query
                     .OrderByDescending(r => r.Date)
                     .Select(r => new
@@ -359,7 +363,36 @@ namespace PAM.Controllers
                         r.Status,
                         r.Date,
                         r.IsApprovedByPm,
-                        r.Remarks
+                        r.Remarks,
+
+                        // Check if any Purchase Order exists for this Material Request
+                        IsPOAvailable = _dbContext.PurchaseOrders
+                            .Any(po => po.MaterialId == r.MaterialId),
+
+                        // Remove IsInsternalTransfer (warehouseQuantities references)
+
+                        // Order Percent = (Sum of ordered quantities / Sum of requested quantities) * 100
+                        OrderPercent = (
+                            (_dbContext.PoDetails
+                                .Where(pd => pd.GetPurchase_Order.MaterialId == r.MaterialId
+                                            && pd.GetPurchase_Order.Postatus != "Cancelled")
+                                .Sum(pd => (decimal?)pd.Qty) ?? 0)
+                            /
+                            (_dbContext.MaterialDetails
+                                .Where(md => md.MaterialId == r.MaterialId)
+                                .Sum(md => (decimal?)md.Quantity) ?? 1)
+                        ) * 100,
+
+                        // Delivered Percent: now only from InStocks (no InWarehouses)
+                        DeliveredPercent = (
+                            (_dbContext.InStocks
+                                .Where(s => s.GetPurchase_Order.MaterialId == r.MaterialId)
+                                .Sum(s => (decimal?)s.Quantity) ?? 0)
+                            /
+                            (_dbContext.MaterialDetails
+                                .Where(md => md.MaterialId == r.MaterialId)
+                                .Sum(md => (decimal?)md.Quantity) ?? 1)
+                        ) * 100
                     })
                     .ToListAsync();
 
@@ -371,8 +404,7 @@ namespace PAM.Controllers
                 return StatusCode(500, "An error occurred while retrieving requests.");
             }
         }
-
-
+                
         [Authorize]
         [HttpGet("requestdetails/{materialId}")]
         public async Task<IActionResult> GetRequestDetails(int materialId)

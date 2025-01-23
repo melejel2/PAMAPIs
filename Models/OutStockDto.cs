@@ -27,5 +27,13 @@ namespace PAMAPIs.Models
         public int? NumId { get; set; }
 
         public int SiteId { get; set; }
+
+        public int? ToSiteId { get; set; }
+
+        public string Remarks { get; set; }
+
+        public string OutStockNote { get; set; }  // NEW property
+
+        public bool? IsApprovedByOP { get; set; } // NEW property
     }
 }
